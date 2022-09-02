@@ -1,6 +1,6 @@
 /*
  This file is part of the BlueJ program. 
- Copyright (C) 2014,2015,2016,2018,2019,2020 Michael Kölling and John Rosenberg
+ Copyright (C) 2014,2015,2016,2018,2019,2020,2021 Michael Kölling and John Rosenberg
  
  This program is free software; you can redistribute it and/or 
  modify it under the terms of the GNU General Public License 
@@ -22,6 +22,7 @@
 package bluej.editor.fixes;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map.Entry;
@@ -30,6 +31,11 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
+import bluej.debugger.gentype.GenTypeClass;
+import bluej.parser.*;
+import bluej.pkgmgr.JavadocResolver;
+import bluej.pkgmgr.Package;
+import bluej.utility.JavaReflective;
 import javafx.beans.binding.DoubleExpression;
 import javafx.beans.binding.StringExpression;
 import javafx.beans.property.BooleanProperty;
@@ -196,6 +202,9 @@ public class SuggestionList
      * Can be zero, when you don't want to show any types.
      */
     private final DoubleProperty typeWidth;
+    
+    /** Keep a strong reference for the type width binding to avoid being GCed **/
+    private final DoubleProperty typeWidthDerivedProperty;
 
     /** Used when "replaying" last calculateEligible call */
     private String lastPrefix;
@@ -459,8 +468,8 @@ public class SuggestionList
             }
         });
         JavaFXUtil.addStyleClass(listBox, "suggestion-list");
-        this.typeWidth.bind(choices.stream().allMatch(s -> s.type == null) ? new ReadOnlyDoubleWrapper(0.0) : listBox.cssTypeWidthProperty());
-
+        typeWidthDerivedProperty = choices.stream().allMatch(s -> s.type == null) ? new ReadOnlyDoubleWrapper(0.0) : listBox.cssTypeWidthProperty();
+        this.typeWidth.bind(typeWidthDerivedProperty);
 
         listBox.setBackground(null);
         listBox.setItems(this.showingItems);
@@ -1158,5 +1167,32 @@ public class SuggestionList
          * Add any necessary listeners to a code completion window
          */
         public void setupSuggestionWindow(Stage window);
+    }
+
+    /**
+     * Add some static classes for code completion suggestions:
+     * System (for using e.g. System.out.println() and Greenfood (if we are in Greenfoot, and that Greenfoot is imported in
+     * the user code)
+     */
+    public static void getStaticClassesCompletion(List<AssistContent> completionCandidates, boolean isGreenfootImported, Package pkg, JavadocResolver javadocResolver)
+    {
+        if (Config.isGreenfoot() && isGreenfootImported)
+        {
+            JavaReflective greenfootClassRef = new JavaReflective(pkg.loadClass("greenfoot.Greenfoot"));
+            ExpressionTypeInfo greenfootClass = new ExpressionTypeInfo(new GenTypeClass(greenfootClassRef), null, null, true, false);
+            AssistContent[] greenfootStatic = ParseUtils.getPossibleCompletions(greenfootClass, javadocResolver, null, null);
+            Arrays.stream(greenfootStatic)
+                .filter(ac -> ac.getKind() == AssistContent.CompletionKind.METHOD)
+                .forEach(ac -> completionCandidates.add(new PrefixCompletionWrapper(ac, "Greenfoot.")));
+        }
+
+        // We also provide completion for the System class - "System.out", "System.err" and "System.in" in order
+        // to facilitate the very common "System.out.println()" for example.
+        JavaReflective systemClassRef = new JavaReflective(pkg.loadClass("java.lang.System"));
+        ExpressionTypeInfo systemClass = new ExpressionTypeInfo(new GenTypeClass(systemClassRef), null, null, true, false);
+        AssistContent[] systemStatic = ParseUtils.getPossibleCompletions(systemClass, javadocResolver, null, null);
+        Arrays.stream(systemStatic)
+            .filter(ac -> (ac.getName().equals("out") || ac.getName().equals("err") || ac.getName().equals("in")))
+            .forEach(ac -> completionCandidates.add(new PrefixCompletionWrapper(ac, "System.")));
     }
 }

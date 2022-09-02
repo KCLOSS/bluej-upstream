@@ -1,6 +1,6 @@
 /*
  This file is part of the BlueJ program. 
- Copyright (C) 1999-2010,2011,2012,2013,2014,2015,2016,2017,2018,2019,2020,2021  Michael Kolling and John Rosenberg
+ Copyright (C) 1999-2010,2011,2012,2013,2014,2015,2016,2017,2018,2019,2020,2021,2022  Michael Kolling and John Rosenberg
  
  This program is free software; you can redistribute it and/or 
  modify it under the terms of the GNU General Public License 
@@ -67,7 +67,6 @@ import bluej.views.ConstructorView;
 import bluej.views.MethodView;
 import javafx.animation.*;
 import javafx.application.Platform;
-import javafx.beans.binding.Bindings;
 import javafx.beans.binding.BooleanExpression;
 import javafx.beans.property.*;
 import javafx.beans.value.ChangeListener;
@@ -106,11 +105,14 @@ import threadchecker.Tag;
 import javax.swing.*;
 import java.io.File;
 import java.io.IOException;
+import java.net.URL;
 import java.util.List;
 import java.util.*;
+import java.util.Map.Entry;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 /**
  * The main user interface frame which allows editing of packages
@@ -161,6 +163,7 @@ public class PkgMgrFrame
     private @OnThread(Tag.FX) ButtonBase teamStatusButton;
     private @OnThread(Tag.FX) ButtonBase teamShareButton;
     private TeamActionGroup teamActions;
+    private BooleanProperty projectOpenProperty = new SimpleBooleanProperty(false);
     @OnThread(Tag.FX)
     private final List<Node> itemsToDisable = new ArrayList<>();
     @OnThread(Tag.FX)
@@ -301,7 +304,7 @@ public class PkgMgrFrame
             BorderPane topPane = new BorderPane();
             pkgEditorScrollPane = new UnfocusableScrollPane(null);
             pkgEditorScrollPane.setVisible(false);
-            pkgEditorScrollPane.visibleProperty().bind(pkgEditorScrollPane.contentProperty().isNotNull());
+            JavaFXUtil.addChangeListenerAndCallNow(pkgEditorScrollPane.contentProperty(), newVal -> pkgEditorScrollPane.setVisible(newVal != null));
             pkgEditorScrollPane.setFitToWidth(true);
             pkgEditorScrollPane.setFitToHeight(true);
             Label emptyProjectMessage = new Label(Config.getString("pkgmgr.noProjectOpened.message"));
@@ -319,7 +322,7 @@ public class PkgMgrFrame
                 // Toggle it:
                 showingTextEval.set(!showingTextEval.get());
             });
-            triangleLabel.scaleProperty().bind(Bindings.when(showingTextEval).then(-1.0).otherwise(1.0));
+            JavaFXUtil.addChangeListenerAndCallNow(showingTextEval, newVal -> triangleLabel.scaleProperty().set((newVal) ? -1.0 : 1.0));
             FXPlatformRunnable addScrollBarListener = new FXPlatformRunnable()
             {
                 @Override
@@ -469,9 +472,12 @@ public class PkgMgrFrame
 
             testStatusMessage = new Label();
             JavaFXUtil.addStyleClass(testStatusMessage, "test-status-message");
-            // Hide when empty so padding doesn't show:
-            testStatusMessage.managedProperty().bind(testStatusMessage.textProperty().isNotEmpty());
-            testStatusMessage.visibleProperty().bind(testStatusMessage.textProperty().isNotEmpty());
+            // Hide when empty so padding doesn't show:s
+            JavaFXUtil.addChangeListenerAndCallNow(testStatusMessage.textProperty(), newVal -> 
+            {
+                testStatusMessage.setManaged(!newVal.isEmpty());
+                testStatusMessage.setVisible(!newVal.isEmpty());
+            });
             BorderPane.setAlignment(testStatusMessage, Pos.CENTER_LEFT);
             statusArea.setLeft(testStatusMessage);
 
@@ -1054,6 +1060,9 @@ public class PkgMgrFrame
 
             teamActions = aPkg.getProject().getTeamActions();
             resetTeamActions();
+
+            //update the "open project" property
+            projectOpenProperty.set(true);
             
             //update TeamSettings menu items.
             commitMenuItem.textProperty().unbind();
@@ -1602,6 +1611,9 @@ public class PkgMgrFrame
                 {
                     pmf = createFrame(initialPkg, this);
                 }
+
+                //update the "open project" property
+                pmf.projectOpenProperty.set(true);
             }
 
             pmf.setVisible(true);
@@ -1732,6 +1744,14 @@ public class PkgMgrFrame
             doSave();
         }
 
+        // Update the "project open" property, and update actions
+        // *only if we are in the context of closing a project and keeping 1 BlueJ window alive*
+        if(keepLastFrame)
+        {
+            projectOpenProperty.set(false);
+            teamActions.setAllDisabled();
+        }
+        
         // If only one frame and this was from the menu
         // "close", close should close existing package rather
         // than remove frame
@@ -1972,11 +1992,13 @@ public class PkgMgrFrame
                 "Marion Zalk",
         };
 
-        Image image = new Image(Boot.class.getResource("gen-bluej-splash.png").toString());
+        // This can URL be null in development:
+        URL splashImageURL = Boot.class.getResource("gen-bluej-splash.png");
+        Image image = splashImageURL == null ? null : new Image(splashImageURL.toString());
         if (aboutDialog == null)
         {
             aboutDialog = new AboutDialogTemplate(getWindow().getOwner(), Boot.BLUEJ_VERSION,
-                    "http://www.bluej.org/", image, translatorNames, previousTeamMembers);
+                    "https://www.bluej.org/", image, translatorNames, previousTeamMembers);
             aboutDialog.showAndWait();
         }
         else if (!aboutDialog.isShowing())
@@ -2631,11 +2653,12 @@ public class PkgMgrFrame
             if (codePad == null)
             {
                 codePad = new CodePad(this, bottomOverlay);
-                addCtrlTabShortcut(codePad);
+                addCtrlTabShortcut(codePad.getInputFieldPane());
+                addCtrlTabShortcut(codePad.getHistoryPane());
                 CodePad cpFinal = codePad;
                 itemsToDisable.add(cpFinal);
                 bottomPane.getItems().add(codePad);
-                codePad.focusInputField();
+                codePad.getInputFieldPane().getPkgMgrPaneNode().requestFocus();
             }
             codePad.setDisable(isEmptyFrame());
         }
@@ -2893,25 +2916,25 @@ public class PkgMgrFrame
         updateButton = new Button();
         updateButton.setFocusTraversable(false);
         updateAction.useButton(this, updateButton);
-        updateButton.visibleProperty().bind(updateButton.disableProperty().not());
+        JavaFXUtil.addChangeListenerAndCallNow(updateButton.disableProperty(), newVal -> updateButton.setVisible(!newVal));
         teamPanelItemsOnceShared.getChildren().add(updateButton);
 
         commitButton = new Button();
         commitButton.setFocusTraversable(false);
         commitCommentAction.useButton(this, commitButton);
-        commitButton.visibleProperty().bind(commitButton.disableProperty().not());
+        JavaFXUtil.addChangeListenerAndCallNow(commitButton.disableProperty(), newVal -> commitButton.setVisible(!newVal));
         teamPanelItemsOnceShared.getChildren().add(commitButton);
 
         teamStatusButton = new Button();
         teamStatusButton.setFocusTraversable(false);
         statusAction.useButton(this, teamStatusButton);
-        teamStatusButton.visibleProperty().bind(teamStatusButton.disableProperty().not());
+        JavaFXUtil.addChangeListenerAndCallNow(teamStatusButton.disableProperty(), newVal -> teamStatusButton.setVisible(!newVal));
         teamPanelItemsOnceShared.getChildren().add(teamStatusButton);
 
         teamShareButton = new Button();
         teamShareButton.setFocusTraversable(false);
         shareAction.useButton(this, teamShareButton);
-        teamShareButton.visibleProperty().bind(teamShareButton.disableProperty().not());
+        JavaFXUtil.addChangeListenerAndCallNow(teamShareButton.disableProperty(), newVal -> teamShareButton.setVisible(!newVal));
         teamPanelItemsUnshared.getChildren().add(teamShareButton);
         teamShareButton.textProperty().unbind();
         teamShareButton.setText(Config.getString("team.share.short"));
@@ -2920,7 +2943,10 @@ public class PkgMgrFrame
         teamShowSharedButtons = teamShareButton.disableProperty().and(teamStatusButton.disableProperty().not());
         teamPanelItemsOnceShared.managedProperty().bind(teamShowSharedButtons);
 
-
+        // If no project is loaded, none of the once shared / unshared buttons should be visible
+        teamPanelItemsOnceShared.visibleProperty().bind(projectOpenProperty);
+        teamPanelItemsUnshared.visibleProperty().bind(projectOpenProperty);
+        
         VBox foldout = new VBox(teamPanel, testPanel);
         teamPanel.setCollapsible(false);
         teamPanel.setExpanded(true);
@@ -2964,11 +2990,11 @@ public class PkgMgrFrame
     private void setupMenus() {
         MenuBar menubar = new MenuBar();
         {
-            Menu menu = new Menu(Config.getString("menu.package"));
+            Menu menu = new Menu(Config.getMenuString("menu.package"));
             menubar.getMenus().add(menu);
             menu.getItems().add(new NewProjectAction(this).makeMenuItem());
             menu.getItems().add(new OpenProjectAction(this).makeMenuItem());
-            recentProjectsMenu = new Menu(Config.getString("menu.package.openRecent"));
+            recentProjectsMenu = new Menu(Config.getMenuString("menu.package.openRecent"));
             recentProjectsMenu.setOnShowing(e -> updateRecentProjects());
             // Must update once now or else menu is empty, in which case the on-showing
             // action never gets triggered:
@@ -2995,7 +3021,7 @@ public class PkgMgrFrame
         }
 
         {
-            Menu menu = new Menu(Config.getString("menu.edit"));
+            Menu menu = new Menu(Config.getMenuString("menu.edit"));
             menubar.getMenus().add(menu);
             menu.getItems().add(newClassAction.makeMenuItem());
             menu.getItems().add(newPackageAction.makeMenuItem());
@@ -3009,7 +3035,7 @@ public class PkgMgrFrame
 
         ExtensionsManager extMgr = ExtensionsManager.getInstance();
         {
-            Menu toolsMenu = new Menu(Config.getString("menu.tools"));
+            Menu toolsMenu = new Menu(Config.getMenuString("menu.tools"));
             toolsMenuManager.set(new ExtensionsMenuManager(toolsMenu, extMgr, null));
 
             toolsMenu.getItems().add(compileAction.makeMenuItem());
@@ -3082,7 +3108,7 @@ public class PkgMgrFrame
             menubar.getMenus().add(toolsMenu);
         }
         {
-            Menu extensionsMenu = new Menu(Config.getString("menu.view"));
+            Menu extensionsMenu = new Menu(Config.getMenuString("menu.view"));
             CheckMenuItem item = JavaFXUtil.makeCheckMenuItem(Config.getString("menu.view.showUses"), showUsesProperty, null);
             extensionsMenu.getItems().add(item);
             menuItemsToDisable.add(item);
@@ -3093,7 +3119,7 @@ public class PkgMgrFrame
             extensionsMenu.getItems().add(JavaFXUtil.makeCheckMenuItem(Config.getString("menu.view.showExecControls"), showingDebugger, Config.hasAcceleratorKey("menu.view.showExecControls") ? Config.getAcceleratorKeyFX("menu.view.showExecControls") : null));
 
             CheckMenuItem terminalItem = JavaFXUtil.makeCheckMenuItem(Config.getString("menu.view.showTerminal"), showingTerminal, new KeyCodeCombination(KeyCode.T, KeyCombination.SHORTCUT_DOWN));
-            terminalItem.disableProperty().bind(pkg.isNull());
+            JavaFXUtil.addChangeListenerAndCallNow(pkg, newVal -> terminalItem.setDisable(newVal == null));
             extensionsMenu.getItems().add(terminalItem);
             extensionsMenu.getItems().add(JavaFXUtil.makeCheckMenuItem(Config.getString("menu.view.showTextEval"), showingTextEval, Config.hasAcceleratorKey("menu.view.showTextEval") ? Config.getAcceleratorKeyFX("menu.view.showTextEval") : null));
             if (teamAndTestFoldout != null)
@@ -3104,7 +3130,7 @@ public class PkgMgrFrame
         }
 
         {
-            Menu menu = new Menu(Config.getString("menu.help"));
+            Menu menu = new Menu(Config.getMenuString("menu.help"));
             if (!Config.isMacOS()) // no "About" here for Mac
             {
                 menu.getItems().add(new HelpAboutAction(this).makeMenuItem());
@@ -3245,50 +3271,60 @@ public class PkgMgrFrame
      * Adds shortcuts for Ctrl-TAB and Ctrl-Shift-TAB to the given pane, which move to the
      * next/previous pane of the main three (package editor, object bench, code pad) that are visible
      */
-    @OnThread(Tag.FX)
+    @OnThread(Tag.FXPlatform)
     private void addCtrlTabShortcut(final PkgMgrPane srcPane)
     {
-        srcPane.asNode().addEventFilter(KeyEvent.KEY_PRESSED, e -> {
+        srcPane.getPkgMgrPaneNode().addEventFilter(KeyEvent.KEY_PRESSED, e -> {
             if ((e.getCode() == KeyCode.TAB && e.isControlDown()) || e.getCode() == KeyCode.F6)
             {
-                if (!e.isShiftDown())
+                // Maps each pane to an action that tries to focus it, and returns true if
+                // the focus was possible, false if it was not.  We generate it dynamically
+                // because the codePad field is only non-null while the codePad is visible:
+                LinkedHashMap<PkgMgrPane, Supplier<Boolean>> panes = new LinkedHashMap<>();
+                panes.put(editor, this::tryFocusClassDiagram);
+                panes.put(objbench, this::tryFocusObjBench);
+                if (codePad != null)
                 {
-                    // Try to focus next pane.
-                    if (srcPane == editor)
+                    panes.put(codePad.getHistoryPane(), () -> tryFocusCodePad(false));
+                    panes.put(codePad.getInputFieldPane(), () -> tryFocusCodePad(true));
+                }
+                
+                ArrayList<Entry<PkgMgrPane, Supplier<Boolean>>> indexed = new ArrayList<>(panes.entrySet());
+                
+                int currentFocused = Utility.findIndex(indexed, en -> en.getKey().getPkgMgrPaneNode() == srcPane.getPkgMgrPaneNode());
+                
+                if (currentFocused == -1)
+                {
+                    // Just try and focus the first thing we can:
+                    for (Entry<PkgMgrPane, Supplier<Boolean>> en : indexed)
                     {
-                        if (!tryFocusObjBench())
-                            tryFocusCodePad();
-                        // If codepad can't be focused, do nothing
-
-                    }
-                    else if (srcPane == objbench)
-                    {
-                        if (!tryFocusCodePad())
-                            tryFocusClassDiagram();
-                    }
-                    else
-                    {
-                        if (!tryFocusClassDiagram())
-                            tryFocusObjBench();
+                        if (en.getValue().get())
+                            break;
                     }
                 }
                 else
                 {
-                    // Try to focus prev pane
-                    if (srcPane == editor)
+                    if (!e.isShiftDown())
                     {
-                        if (!tryFocusCodePad())
-                            tryFocusObjBench();
-                    }
-                    else if (srcPane == objbench)
-                    {
-                        if (!tryFocusClassDiagram())
-                            tryFocusCodePad();
+                        // Try to focus next pane.
+                        // Important to use != here, not <=, as we'll cycle round: 
+                        for (int i = (currentFocused + 1) % indexed.size(); i != currentFocused; i = (i + 1) % indexed.size())
+                        {
+                            if (indexed.get(i).getValue().get())
+                                break;
+                        }
                     }
                     else
                     {
-                        if (!tryFocusObjBench())
-                            tryFocusClassDiagram();
+                        // Try to focus prev pane
+                        // Important to use != here, not <=, as we'll cycle round:
+                        // We have to + indexed.size() when doing modulo with negative numbers as e.g. with 5 items, -1 % 5 is -1,
+                        // but if we add 5 then (-1 + 5) % 5 = 4 which is what we want.
+                        for (int i = (currentFocused - 1 + indexed.size()) % indexed.size(); i != currentFocused; i = (i - 1 + indexed.size()) % indexed.size())
+                        {
+                            if (indexed.get(i).getValue().get())
+                                break;
+                        }
                     }
                 }
                 e.consume();
@@ -3307,13 +3343,21 @@ public class PkgMgrFrame
     }
 
     @OnThread(Tag.FXPlatform)
-    private boolean tryFocusCodePad()
+    private boolean tryFocusCodePad(boolean inputField)
     {
         if (codePad != null)
         {
-            if (!codePad.isDisabled())
+            if (inputField)
             {
-                codePad.focusInputField();
+                if (!codePad.isDisabled())
+                {
+                    codePad.getInputFieldPane().getPkgMgrPaneNode().requestFocus();
+                    return true;
+                }
+            }
+            else
+            {
+                codePad.getHistoryPane().getPkgMgrPaneNode().requestFocus();
                 return true;
             }
         }
@@ -3437,10 +3481,10 @@ public class PkgMgrFrame
         return pkg;
     }
 
-    // Used as a way to tag the three main panes in the PkgMgrFrame window
+    // Used as a way to tag the main panes in the PkgMgrFrame window
     public static interface PkgMgrPane
     {
-        @OnThread(Tag.FX)
-        public default Node asNode() { return (Node)this;}
+        @OnThread(Tag.FXPlatform)
+        public Node getPkgMgrPaneNode();
     }
 }

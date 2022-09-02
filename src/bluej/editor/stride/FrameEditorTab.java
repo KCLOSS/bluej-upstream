@@ -101,6 +101,7 @@ import javafx.geometry.Point2D;
 import javafx.geometry.Pos;
 import javafx.scene.Cursor;
 import javafx.scene.Node;
+import javafx.scene.Scene;
 import javafx.scene.canvas.Canvas;
 import javafx.scene.canvas.GraphicsContext;
 import javafx.scene.control.Button;
@@ -128,6 +129,7 @@ import javafx.scene.text.Text;
 import javafx.scene.text.TextFlow;
 import javafx.stage.Stage;
 import javafx.util.Duration;
+import javafx.util.Pair;
 import threadchecker.OnThread;
 import threadchecker.Tag;
 
@@ -439,6 +441,27 @@ public class FrameEditorTab extends FXTab implements InteractionManager, Suggest
                     }
                     break;
 
+                    // From Cherry
+                    case E:
+                        if (blockCursorFocused) {
+
+                            VBox vbox = new VBox();
+                            for (Pair<CodeError, Frame> pair : getErrorLocationList()) {
+                                Frame frame = pair.getValue();
+                                vbox.getChildren().add(new Button(pair.getKey().getMessage() + " in the frame " + frame.getScreenReaderText() + frame.getParentCanvas().getParentLocationDescription()));
+                            }
+
+                            // display the list of errors
+                            Stage popup = new Stage();
+                            Scene scene = new Scene(vbox);
+                            popup.setScene(scene);
+                            popup.show();
+
+                            selection.clear();
+                            event.consume();
+                        }
+                        break;
+
 
                 //This is a workaround for a JDK bug on Mac.
                 //'='/'-' don't work as menu accelerators.
@@ -525,9 +548,13 @@ public class FrameEditorTab extends FXTab implements InteractionManager, Suggest
                 {
                     el.updateSourcePositions();
                     FrameEditorTab.this.topLevelFrameProperty.setValue(frame);
-                    nameProperty.bind(getTopLevelFrame().nameProperty());
+                    // This should not be combined with the below code, as this needs to be called
+                    // immediately and the one below should not be (see note).
+                    JavaFXUtil.addChangeListenerAndCallNow(getTopLevelFrame().nameProperty(), newVal -> nameProperty.set(newVal));
                     // Whenever name changes, trigger recompile even without leaving slot:
-                    JavaFXUtil.addChangeListener(getTopLevelFrame().nameProperty(), n ->
+                    // Note: this one should not use ..AndCallNow, because we don't want to treat the code as modified
+                    // just because we loaded it.  We only want an actual later change to trigger it:
+                    JavaFXUtil.addChangeListener(getTopLevelFrame().nameProperty(), newVal ->
                     {
                         JavaFXUtil.runNowOrLater(() -> {
                             editor.codeModified();
@@ -917,8 +944,8 @@ public class FrameEditorTab extends FXTab implements InteractionManager, Suggest
         Label showVarLabel = new Label("Show variables: ");
         ComboBox<ShowVars> showVars = new ComboBox<>(FXCollections.observableArrayList(ShowVars.values()));
         showVars.getSelectionModel().select(0);
-        debugVarVisibleProperty.bind(showVars.getSelectionModel().selectedItemProperty().isEqualTo(ShowVars.FIELDS));
-
+        JavaFXUtil.addChangeListenerAndCallNow(showVars.getSelectionModel().selectedItemProperty(), newVal -> debugVarVisibleProperty.set(newVal == ShowVars.FIELDS));
+        
         buttons.getChildren().addAll(stepButton, continueButton, haltButton, showVarLabel, showVars);
         contentRoot.setBottom(buttons);
     }
@@ -1735,6 +1762,31 @@ public class FrameEditorTab extends FXTab implements InteractionManager, Suggest
         return Stream.concat(
             getTopLevelFrame().getEditableSlots().flatMap(EditableSlot::getCurrentErrors)
             , getTopLevelFrame().getAllFrames().flatMap(Frame::getCurrentErrors));
+    }
+
+    // From Cherry
+    @OnThread(Tag.FXPlatform)
+    public List<Pair<CodeError, Frame>> getErrorLocationList()
+    {
+        List<Pair<CodeError, Frame>> list = new ArrayList<>();
+
+        // add errors and their respective origin frame to the returned list
+        for (EditableSlot slot : Utility.iterableStream(getTopLevelFrame().getEditableSlots())) {
+            if (slot.getParentFrame()!=null) {
+                for (CodeError error : Utility.iterableStream(slot.getCurrentErrors())) {
+                    list.add(new Pair<>(error, slot.getParentFrame()));
+                }
+            }
+        }
+        for (Frame frame : Utility.iterableStream(getTopLevelFrame().getAllFrames())) {
+            if (frame != null) {
+                for (CodeError error : Utility.iterableStream(frame.getCurrentErrors())) {
+                    list.add(new Pair<>(error, frame));
+                }
+            }
+        }
+
+        return list;
     }
 
     @Override
@@ -2838,7 +2890,7 @@ public class FrameEditorTab extends FXTab implements InteractionManager, Suggest
             banner.setRight(new VBox(close, countdown));
             JavaFXUtil.addStyleClass(banner, "banner-undo-delete");
             //bannerText.styleProperty().bind(new ReadOnlyStringWrapper("-fx-font-size:").concat(PrefMgr.strideFontSizeProperty().multiply(4).divide(3).asString()).concat("pt;"));
-            banner.styleProperty().bind(new ReadOnlyStringWrapper("-fx-font-size:").concat(PrefMgr.strideFontSizeProperty().asString()).concat("pt;"));
+            JavaFXUtil.addChangeListenerAndCallNow(PrefMgr.strideFontSizeProperty(), newVal -> banner.setStyle("-fx-font-size:" + newVal + "pt;"));
             bannerPane.getChildren().add(0, banner);
             close.setOnAction(e -> {
                 countdown.stop();

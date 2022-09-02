@@ -19,20 +19,18 @@
  This file is subject to the Classpath exception as provided in the
  LICENSE.txt file that accompanied this code.
  */
-package bluej.editor.flow;
+package bluej.editor.base;
 
-import bluej.editor.flow.FlowEditorPane.FlowEditorPaneListener;
-import bluej.editor.flow.TextLine.StyledSegment;
+import bluej.editor.base.BaseEditorPane.BaseEditorPaneListener;
+import bluej.editor.base.TextLine.StyledSegment;
+import bluej.editor.flow.Document;
 import bluej.utility.javafx.FXFunction;
-import bluej.utility.javafx.FXSupplier;
 import javafx.beans.binding.DoubleExpression;
 import javafx.beans.binding.StringExpression;
 import javafx.geometry.Bounds;
 import javafx.geometry.Point2D;
 import javafx.scene.Scene;
-import javafx.scene.input.MouseEvent;
 import javafx.scene.shape.Path;
-import javafx.scene.shape.Shape;
 import javafx.scene.text.HitInfo;
 import threadchecker.OnThread;
 import threadchecker.Tag;
@@ -56,7 +54,7 @@ import java.util.stream.IntStream;
 public class LineDisplay
 {
     // Handler for clicking in a line margin
-    private final FlowEditorPaneListener flowEditorPaneListener;
+    private final BaseEditorPaneListener editorPaneListener;
     // Zero is the first line in document
     private int firstVisibleLineIndex = 0;
     // The display offset in pixels of the first visible line.
@@ -70,23 +68,24 @@ public class LineDisplay
     private final ArrayList<LineDisplayListener> lineDisplayListeners = new ArrayList<>();
     
     private final StringExpression fontCSS;
-    private final FXSupplier<Double> getHeight;
     private final DoubleExpression horizScrollProperty;
-    private double lineHeightEstimate = 1.0;    
+    private double lineHeightEstimate = 1.0;   
+    
+    private final boolean showLeftMargin;
 
-    public LineDisplay(FXSupplier<Double> getHeight, DoubleExpression horizScrollProperty, StringExpression fontCSS, FlowEditorPaneListener flowEditorPaneListener)
+    public LineDisplay(DoubleExpression horizScrollProperty, StringExpression fontCSS, boolean showLeftMargin, BaseEditorPaneListener editorPaneListener)
     {
         this.fontCSS = fontCSS;
-        this.getHeight = getHeight;
         this.horizScrollProperty = horizScrollProperty;
-        this.flowEditorPaneListener = flowEditorPaneListener;
+        this.editorPaneListener = editorPaneListener;
+        this.showLeftMargin = showLeftMargin;
     }
 
     /**
      * Gets the visible line object corresponding to the given document line.
      * Throws an exception if that line is not visible (you should check first via isLineVisible).
      */
-    MarginAndTextLine getVisibleLine(int line)
+    public MarginAndTextLine getVisibleLine(int line)
     {
         if (!isLineVisible(line))
         {
@@ -99,7 +98,7 @@ public class LineDisplay
     /**
      * Checks if the given document line is currently visible on screen.
      */
-    boolean isLineVisible(int line)
+    public boolean isLineVisible(int line)
     {
         return line >= firstVisibleLineIndex && line < firstVisibleLineIndex + visibleLines.size();
     }
@@ -109,10 +108,13 @@ public class LineDisplay
      * an editor pane.
      * @param allLines The ordered stream of all lines in the document.
      * @param height The height of the graphical pane to render into, in pixels
+     * @param <L> The inner list type.  Making this a type parameter allows us to pass List&lt;List&lt;StyledSegment&gt;&gt;
+     *           or List&lt;ArrayList&lt;StyledSegment&gt;&gt; -- the type List&lt;? extends List&lt;StyledSegment&gt;&gt;
+     *           would not work for either because of the way Java's generic rules work.
      * @return The ordered list of visible lines
      */
     @OnThread(Tag.FX)
-    List<MarginAndTextLine> recalculateVisibleLines(List<List<StyledSegment>> allLines, FXFunction<Double, Double> snapHeight, double xTranslate, double width, double height, boolean lineWrapping)
+    public <L extends List<StyledSegment>> List<MarginAndTextLine> recalculateVisibleLines(List<L> allLines, FXFunction<Double, Double> snapHeight, double xTranslate, double width, double height, boolean lineWrapping, BaseEditorPane editorPane)
     {
         if (firstVisibleLineIndex >= allLines.size())
         {
@@ -136,11 +138,11 @@ public class LineDisplay
             int linesToDraw = 1 + (int)Math.ceil((height - (lineHeight + firstVisibleLineOffset)) / lineHeight);
             
             // Start at the first visible line:
-            Iterator<List<StyledSegment>> lines = allLines.subList(firstVisibleLineIndex, Math.min(linesToDraw + firstVisibleLineIndex, allLines.size())).iterator();
+            Iterator<L> lines = allLines.subList(firstVisibleLineIndex, Math.min(linesToDraw + firstVisibleLineIndex, allLines.size())).iterator();
             int lineIndex = firstVisibleLineIndex;
             while (lines.hasNext())
             {
-                MarginAndTextLine line = visibleLines.computeIfAbsent(lineIndex, k -> new MarginAndTextLine(k + 1, new TextLine(lineWrapping), () -> flowEditorPaneListener.marginClickedForLine(k), () -> flowEditorPaneListener.getContextMenuToShow(), flowEditorPaneListener::scrollEventOnTextLine));
+                MarginAndTextLine line = visibleLines.computeIfAbsent(lineIndex, k -> new MarginAndTextLine(k + 1, new TextLine(lineWrapping), showLeftMargin, () -> editorPaneListener.marginClickedForLine(k), () -> editorPaneListener.getContextMenuToShow(editorPane), e -> editorPaneListener.scrollEventOnTextLine(e, editorPane)));
                 line.textLine.setText(lines.next(), xTranslate, false, fontCSS);
                 lineIndex += 1;
             }
@@ -156,7 +158,7 @@ public class LineDisplay
             int lineIndex;
             for (lineIndex = firstVisibleLineIndex; lineIndex < allLines.size() && totalHeightSoFar < height; lineIndex += 1)
             {
-                MarginAndTextLine line = visibleLines.computeIfAbsent(lineIndex, k -> new MarginAndTextLine(k + 1, new TextLine(lineWrapping), () -> flowEditorPaneListener.marginClickedForLine(k), () -> flowEditorPaneListener.getContextMenuToShow(), flowEditorPaneListener::scrollEventOnTextLine));
+                MarginAndTextLine line = visibleLines.computeIfAbsent(lineIndex, k -> new MarginAndTextLine(k + 1, new TextLine(lineWrapping), showLeftMargin, () -> editorPaneListener.marginClickedForLine(k), () -> editorPaneListener.getContextMenuToShow(editorPane), e -> editorPaneListener.scrollEventOnTextLine(e, editorPane)));
                 line.textLine.setText(allLines.get(lineIndex), xTranslate, true, fontCSS);
                 double lineHeight = calculateLineHeight(allLines.get(lineIndex), width);
                 totalHeightSoFar += snapHeight.apply(lineHeight);
@@ -185,13 +187,13 @@ public class LineDisplay
      * with the given pixel offset (zero or negative).
      */
     @OnThread(Tag.FX)
-    void scrollTo(int lineIndex, double lineOffset)
+    public void scrollTo(int lineIndex, double lineOffset)
     {
         firstVisibleLineIndex = lineIndex;
         firstVisibleLineOffset = lineOffset;
     }
     
-    void scrollBy(double deltaY, int documentLines)
+    void scrollBy(double deltaY, int documentLines, double containerHeight)
     {
         // Negative deltaY tries to move down the document, i.e.
         // tries to increase firstVisibleLineIndex
@@ -202,65 +204,11 @@ public class LineDisplay
         double newOverallPos = overallPos - deltaY;
         // Important to clamp in this order, as first clamp
         // may clamp too far, into negative:
-        newOverallPos = Math.min(newOverallPos, lineHeightEstimate * documentLines - getHeight.get());
+        newOverallPos = Math.min(newOverallPos, lineHeightEstimate * documentLines - containerHeight);
         newOverallPos = Math.max(0, newOverallPos);
         int newTopLine = (int)Math.floor(newOverallPos / lineHeightEstimate);
         double newOffset = (newTopLine * lineHeightEstimate) - newOverallPos;
         scrollTo(newTopLine, newOffset);
-        /*
-        // How many lines have we moved the top visible line by?
-        // Sign is opposite to deltaY. 
-        int movedBy = 0;
-        
-        // We get offset to zero, then scroll whole lines, then
-        // finally adjust offset again:
-        if (firstVisibleLineOffset != 0.0)
-        {
-            if (deltaY < 0)
-            {
-                // Scrolling down document, so moving lines upwards,
-                double distToNextTop = averageLineHeight + firstVisibleLineOffset;
-                if (-deltaY < distToNextTop)
-                {
-                    // Can do it by offset alone
-                    firstVisibleLineOffset += deltaY;
-                    return;
-                }
-                else
-                {
-                    deltaY += distToNextTop;
-                    firstVisibleLineOffset = 0;
-                    movedBy += 1;
-                }
-            }
-            else
-            {
-                // Scrolling up document, so moving lines downwards
-                double distToNextTop = -firstVisibleLineOffset;
-                if (deltaY < distToNextTop)
-                {
-                    // Can do it by offset alone
-                    firstVisibleLineOffset += deltaY;
-                    return;
-                }
-                else
-                {
-                    deltaY -= distToNextTop;
-                    firstVisibleLineOffset = 0;
-                }
-            }
-        }
-        // Now scroll entire lines:
-        // TODO watch for hitting document end!
-        while (Math.abs(deltaY) > averageLineHeight)
-        {
-            deltaY -= Math.signum(deltaY) * averageLineHeight;
-            movedBy -= (int)Math.signum(deltaY);
-        }
-        // Now scroll last part by offset:
-        if (deltaY != )
-            */
-        
     }
 
     public double getFirstVisibleLineOffset()
@@ -281,7 +229,7 @@ public class LineDisplay
     /**
      * Scrolls the visible lines so that the given zero-based line index is in view.
      */
-    public void ensureLineVisible(int line)
+    public void ensureLineVisible(int line, double containerHeight, int linesInDocument)
     {
         // Note: if the line is the first/last visible, it may be only partially visible, so we still 
         // scroll because we may need to move slightly to bring the whole line into view.
@@ -297,16 +245,26 @@ public class LineDisplay
         // see the last two lines on the screen, meaning we should scroll up, which is actually best done
         // by the scroll down code)
         if (line >= firstVisibleLineIndex + visibleLines.size() - 1
-            || (visibleLines.size() * lineHeightEstimate < getHeight.get() && firstVisibleLineIndex > 0))
+            || (visibleLines.size() * lineHeightEstimate < containerHeight && firstVisibleLineIndex > 0))
         {            
             // Scroll down:
             double singleLineHeight = lineHeightEstimate;
             // As an example, imagine each line is 10 pixels high, and the whole pane is 84 pixels high.
             // You will need to draw nine lines (so ceil(84 / 10) ) because if you only drew 8, there would be 4 pixels undrawn: 
-            int numLinesCanDisplay = (int)Math.ceil(getHeight.get() / singleLineHeight);
-            // Imagine that you're drawing 9 lines, and you want to show line #14, which will be the last one.  You need to render lines 6,7,8,9,10,11,12,13,14
-            // So the top line is 14 - 9 + 1 = 6
-            firstVisibleLineIndex = line - numLinesCanDisplay + 1;
+            int numLinesCanDisplay = (int)Math.ceil(containerHeight / singleLineHeight);
+            
+            // If the line is visible when the end of the document is showing, just
+            // nudge so that we view the end of the document.
+            if (line >= linesInDocument - numLinesCanDisplay + 1 && firstVisibleLineIndex >= linesInDocument - numLinesCanDisplay + 1)
+            {
+                firstVisibleLineIndex = linesInDocument - numLinesCanDisplay + 1;
+            }
+            else
+            {
+                // Imagine that you're drawing 9 lines, and you want to show line #14, which will be the last one.  You need to render lines 6,7,8,9,10,11,12,13,14
+                // So the top line is 14 - 9 + 1 = 6
+                firstVisibleLineIndex = line - numLinesCanDisplay + 1;
+            }
             if (firstVisibleLineIndex < 0)
             {
                 // Just scroll to top:
@@ -317,7 +275,7 @@ public class LineDisplay
             {
                 // If we are drawing 9 lines with #14 at the bottom, the top line (#6) will be only partially visible.  So
                 // if we have 84 pixels high, we want to slide the top line up 6 pixels, which is 84 - 9*10 = -6.
-                firstVisibleLineOffset = getHeight.get() - (numLinesCanDisplay * singleLineHeight);
+                firstVisibleLineOffset = containerHeight - (numLinesCanDisplay * singleLineHeight);
             }
         }
         // Otherwise, it is visible -- nothing to do.
@@ -388,13 +346,18 @@ public class LineDisplay
             return lineHeightEstimate;
     }
 
-    static interface LineDisplayListener
+    public double textLeftEdge()
+    {
+        return MarginAndTextLine.textLeftEdge(showLeftMargin);
+    }
+
+    public static interface LineDisplayListener
     {
         @OnThread(Tag.FX)
         public void renderedLines(int fromLineIndexIncl, int toLineIndexIncl);
     }
     
-    // Pair of ints; line index and column index (both zero based)
+    // Pair of ints; line index and column index (both zero based).  Null if no relevant point
     public int[] getCaretPositionForLocalPoint(Point2D localPoint)
     {
         for (int i = 0; i < visibleLines.size(); i++)
@@ -403,7 +366,7 @@ public class LineDisplay
             if (currentlyVisibleLine != null && currentlyVisibleLine.getLayoutY() <= localPoint.getY() && localPoint.getY() <= currentlyVisibleLine.getLayoutY() + currentlyVisibleLine.getHeight())
             {
                 // Can't use parentToLocal if layout bounds may be out of date:
-                Point2D pointInLocal = new Point2D(localPoint.getX() - currentlyVisibleLine.getLayoutX() - MarginAndTextLine.TEXT_LEFT_EDGE + horizScrollProperty.get(), localPoint.getY() - currentlyVisibleLine.getLayoutY());
+                Point2D pointInLocal = new Point2D(localPoint.getX() - currentlyVisibleLine.getLayoutX() - MarginAndTextLine.textLeftEdge(showLeftMargin) + horizScrollProperty.get(), localPoint.getY() - currentlyVisibleLine.getLayoutY());
                 if (pointInLocal.getX() >= 0)
                 {
                     HitInfo hitInfo = currentlyVisibleLine.textLine.hitTest(pointInLocal);

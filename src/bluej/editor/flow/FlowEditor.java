@@ -1,6 +1,6 @@
 /*
  This file is part of the BlueJ program. 
- Copyright (C) 2019,2020,2021  Michael Kolling and John Rosenberg
+ Copyright (C) 2019,2020,2021,2022  Michael Kolling and John Rosenberg
 
  This program is free software; you can redistribute it and/or 
  modify it under the terms of the GNU General Public License 
@@ -30,31 +30,34 @@ import bluej.compiler.Diagnostic;
 import bluej.debugger.DebuggerThread;
 import bluej.editor.EditorWatcher;
 import bluej.editor.TextEditor;
+import bluej.editor.base.BackgroundItem;
+import bluej.editor.base.BaseEditorPane;
+import bluej.editor.base.EditorPosition;
+import bluej.editor.base.LineDisplay;
+import bluej.editor.base.MarginAndTextLine;
 import bluej.editor.fixes.EditorFixesManager;
 import bluej.editor.fixes.FixDisplayManager;
 import bluej.editor.flow.FlowActions.FlowAbstractAction;
 import bluej.editor.flow.FlowEditorPane.FlowEditorPaneListener;
-import bluej.editor.flow.FlowEditorPane.LineContainer;
+import bluej.editor.base.LineContainer;
 import bluej.editor.flow.FlowEditorPane.LineStyler;
-import bluej.editor.flow.FlowEditorPane.SelectionListener;
+import bluej.editor.base.BaseEditorPane.SelectionListener;
 import bluej.editor.flow.FlowEditorPane.StyledLines;
 import bluej.editor.flow.FlowErrorManager.ErrorDetails;
 import bluej.editor.flow.JavaSyntaxView.Display;
-import bluej.editor.flow.LineDisplay.LineDisplayListener;
-import bluej.editor.flow.MarginAndTextLine.MarginDisplay;
+import bluej.editor.base.LineDisplay.LineDisplayListener;
+import bluej.editor.base.MarginAndTextLine.MarginDisplay;
 import bluej.editor.flow.StatusLabel.Status;
-import bluej.editor.flow.TextLine.HighlightType;
-import bluej.editor.flow.TextLine.StyledSegment;
+import bluej.editor.base.TextLine.HighlightType;
+import bluej.editor.base.TextLine.StyledSegment;
 import bluej.editor.flow.PrintDialog.PrintChoices;
 import bluej.editor.stride.FXTabbedEditor;
 import bluej.editor.stride.FlowFXTab;
 import bluej.editor.stride.FrameEditor;
-import bluej.parser.AssistContent;
+import bluej.extensions2.editor.DocumentListener;
+import bluej.parser.*;
 import bluej.parser.AssistContent.ParamInfo;
-import bluej.parser.ExpressionTypeInfo;
 import bluej.parser.ImportsCollection.LocatableImport;
-import bluej.parser.ParseUtils;
-import bluej.parser.SourceLocation;
 import bluej.parser.entity.EntityResolver;
 import bluej.parser.entity.JavaEntity;
 import bluej.parser.lexer.JavaLexer;
@@ -76,17 +79,13 @@ import bluej.stride.framedjava.elements.CallElement;
 import bluej.stride.framedjava.elements.CodeElement;
 import bluej.stride.framedjava.elements.NormalMethodElement;
 import bluej.stride.framedjava.slots.ExpressionCompletionCalculator;
-import bluej.parser.AssistContentThreadSafe;
 import bluej.editor.fixes.SuggestionList;
 import bluej.editor.fixes.SuggestionList.SuggestionDetails;
 import bluej.editor.fixes.SuggestionList.SuggestionDetailsWithHTMLDoc;
 import bluej.editor.fixes.SuggestionList.SuggestionListListener;
 import bluej.editor.fixes.SuggestionList.SuggestionListParent;
 import bluej.editor.fixes.SuggestionList.SuggestionShown;
-import bluej.utility.Debug;
-import bluej.utility.DialogManager;
-import bluej.utility.FileUtility;
-import bluej.utility.Utility;
+import bluej.utility.*;
 import bluej.utility.javafx.FXConsumer;
 import bluej.utility.javafx.FXPlatformConsumer;
 import bluej.utility.javafx.FXPlatformRunnable;
@@ -104,9 +103,9 @@ import javafx.beans.property.ReadOnlyDoubleWrapper;
 import javafx.beans.property.ReadOnlyObjectProperty;
 import javafx.beans.property.ReadOnlyStringWrapper;
 import javafx.beans.property.SimpleBooleanProperty;
-import javafx.beans.property.SimpleDoubleProperty;
 import javafx.beans.property.SimpleObjectProperty;
 import javafx.collections.FXCollections;
+import javafx.collections.ListChangeListener;
 import javafx.geometry.BoundingBox;
 import javafx.geometry.Bounds;
 import javafx.geometry.Insets;
@@ -119,8 +118,10 @@ import javafx.scene.Node;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
 import javafx.scene.image.Image;
+import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyCodeCombination;
 import javafx.scene.input.KeyEvent;
+import javafx.scene.input.MouseButton;
 import javafx.scene.input.ScrollEvent;
 import javafx.scene.layout.Background;
 import javafx.scene.layout.BackgroundFill;
@@ -153,6 +154,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, FlowEditorPaneListener, SelectionListener, BlueJEventListener, DocumentListener
@@ -178,6 +180,8 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
     
     private final boolean sourceIsCode;           // true if current buffer is code
     private final List<Menu> fxMenus;
+    private final ListView<ErrorDetails> errorList;
+    private final BorderPane errorListPane;
     private boolean compilationStarted;
     private boolean requeueForCompilation;
     private boolean compilationQueued;
@@ -186,7 +190,7 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
     private CompileType requeueType;
     private final Info info;
     private final StatusLabel saveState;          // the status label
-    private FlowErrorManager errorManager = new FlowErrorManager(this, enable -> {});
+    private FlowErrorManager errorManager = new FlowErrorManager(this);
     private FXTabbedEditor fxTabbedEditor;
     private boolean mayHaveBreakpoints;
     private final BooleanProperty compiledProperty = new SimpleBooleanProperty(true);
@@ -252,7 +256,7 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
     }
 
     @Override
-    public ContextMenu getContextMenuToShow()
+    public ContextMenu getContextMenuToShow(BaseEditorPane editorPane)
     {
         // It may already be showing; if so, hide and re-show at new click position:
         editorContextMenu.hide();
@@ -343,13 +347,13 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
         }
 
         @Override
-        public ContextMenu getContextMenuToShow()
+        public ContextMenu getContextMenuToShow(BaseEditorPane editorPane)
         {
             return null;
         }
 
         @Override
-        public void scrollEventOnTextLine(ScrollEvent e)
+        public void scrollEventOnTextLine(ScrollEvent e, BaseEditorPane editorPane)
         {
         }
     }
@@ -440,6 +444,64 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
         interfaceToggle.setDisable(!sourceIsCode);
         Region toolbar = createToolbar(interfaceToggle.heightProperty());
         setTop(JavaFXUtil.withStyleClass(new BorderPane(toolbar, null, interfaceToggle, null, null), "flow-top-bar"));
+        errorList = new ListView<>(errorManager.getObservableErrorList());
+        errorListPane = new BorderPane(errorList);
+        errorList.setCellFactory(lv -> new ListCell<>() {
+            {
+                setOnMouseClicked(e -> {
+                    if (e.getClickCount() == 2 && e.getButton() == MouseButton.PRIMARY)
+                    {
+                        ErrorDetails err = getItem();
+                        errorList.getSelectionModel().select(err);
+                        flowEditorPane.positionCaret(err.startPos);
+                        flowEditorPane.requestFocus();
+                        e.consume();
+                    }
+                });
+            }
+            @Override
+            @OnThread(value = Tag.FXPlatform, ignoreParent = true)
+            protected void updateItem(ErrorDetails item, boolean empty)
+            {
+                super.updateItem(item, empty);
+                if (empty || item == null)
+                    setText(null);
+                else
+                    setText("Line " + document.getLineFromPosition(item.startPos) + ": " + item.message);
+            }
+        });
+        errorList.addEventFilter(KeyEvent.KEY_PRESSED, e -> {
+            if (e.getCode() == KeyCode.ENTER)
+            {
+                ErrorDetails err = errorList.getSelectionModel().getSelectedItem();
+                if (err != null)
+                {
+                    flowEditorPane.positionCaret(err.startPos);
+                    flowEditorPane.requestFocus();
+                }
+                e.consume();
+            }
+            else if (e.getCode() == KeyCode.ESCAPE)
+            {
+                errorListPane.setVisible(false);
+                errorListPane.setManaged(false);
+                flowEditorPane.requestFocus();
+                e.consume();
+            }
+        });
+        errorListPane.setTop(new Label("Errors"));
+        errorListPane.setPadding(new Insets(3));
+        setRight(errorListPane);
+        errorList.getItems().addListener((ListChangeListener<? super ErrorDetails>) c -> {
+            // Automatically hide list when no errors:
+            if (c.getList().isEmpty())
+            {
+                errorListPane.setVisible(false);
+                errorListPane.setManaged(false);
+            }
+        });
+        errorListPane.setVisible(false);
+        errorListPane.setManaged(false);
         flowEditorPane.addSelectionListener(this);
         flowEditorPane.addLineDisplayListener(new LineDisplayListener()
         {
@@ -921,7 +983,7 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
 
                 if (watcher != null)
                 {
-                    watcher.recordShowErrorMessage(details.identifier, Collections.emptyList());
+                    newDisplay.recordShow(() -> watcher);
                 }
             }
         }
@@ -2114,7 +2176,6 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
             removeSearchHighlights();
             currentSearchResult.setValue(null);
             removeErrorHighlights();
-            errorManager.documentContentChanged();
             showErrorOverlay(null, 0);
         });
         actions.userAction();
@@ -2835,14 +2896,6 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
         if (watcher != null) {
             if (saveState.isChanged() || !errorManager.hasErrorHighlights())
             {
-                if (! saveState.isChanged())
-                {
-                    if (PrefMgr.getFlag(PrefMgr.ACCESSIBILITY_SUPPORT))
-                    {
-                        // Pop up in a dialog:
-                        DialogManager.showTextWithCopyButtonFX(getWindow(), Config.getString("pkgmgr.accessibility.compileDone"), "BlueJ");
-                    }
-                }
                 scheduleCompilation(CompileReason.USER, CompileType.EXPLICIT_USER_COMPILE);
             }
             else
@@ -2854,8 +2907,10 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
 
                     if (PrefMgr.getFlag(PrefMgr.ACCESSIBILITY_SUPPORT))
                     {
-                        // Pop up in a dialog:
-                        DialogManager.showTextWithCopyButtonFX(getWindow(), err.message, "BlueJ");
+                        errorListPane.setManaged(true);
+                        errorListPane.setVisible(true);
+                        errorList.getSelectionModel().select(err);
+                        errorList.requestFocus();
                     }
                 }
             }
@@ -3105,9 +3160,9 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
         );
 
         Point2D localPoint = flowEditorPane.sceneToLocal(scenePoint);
-        OptionalInt caretPos = flowEditorPane.getCaretPositionForLocalPoint(localPoint);
+        Optional<EditorPosition> caretPos = flowEditorPane.getCaretPositionForLocalPoint(localPoint);
         if (caretPos.isPresent())
-            return getLineColumnFromOffset(caretPos.getAsInt());
+            return getLineColumnFromOffset(caretPos.get().getPosition());
         else
             return null;
     }
@@ -3124,14 +3179,26 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
                 javaSyntaxView);
         if (suggests != null)
         {
+            List<AssistContent> completionCandidates = new ArrayList<>();
+            
+            // Get the static classes for completion suggestions (to speed up loading Greenfoot.*, we check if Greenfoot is imported with a regex)
+            SuggestionList.getStaticClassesCompletion(completionCandidates,
+                Pattern.compile("(;|^)\\s*import\\s+greenfoot\\s*\\.\\s*(\\*\\s*;|Greenfoot\\s*;)").matcher(getText(new SourceLocation(1,1), getCaretLocation())).find(),
+                getProject().getPackage(""),
+                javadocResolver);            
+         
             LocatableToken suggestToken = suggests.getSuggestionToken();
             AssistContent[] possibleCompletions = ParseUtils.getPossibleCompletions(suggests, javadocResolver, null, parser.getContainingMethodOrClassNode(flowEditorPane.getCaretPosition()));
             Arrays.sort(possibleCompletions, AssistContent.getComparator());
-            List<SuggestionDetails> suggestionDetails = Arrays.stream(possibleCompletions)
+            completionCandidates.addAll(Arrays.asList(possibleCompletions));
+            
+            // Create suggestions from all the candidates
+            List<SuggestionDetails> suggestionDetails = completionCandidates.stream()
                     .map(AssistContentThreadSafe::new)
                     .map(ac -> new SuggestionDetailsWithHTMLDoc(ac.getName(), ExpressionCompletionCalculator.getParamsCompletionDisplay(ac), ac.getType(), SuggestionShown.COMMON, ac.getDocHTML()))
                     .collect(Collectors.toList());
 
+            // Prepare the suggestions popup
             int originalPosition = suggestToken == null ? flowEditorPane.getCaretPosition() : suggestToken.getPosition();
             Bounds screenPos;
             // First, try to get the character after the caret:
@@ -3178,7 +3245,7 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
                 {
                     if (highlighted != -1)
                     {
-                        codeComplete(possibleCompletions[highlighted], originalPosition, flowEditorPane.getCaretPosition(), suggestionList);
+                        codeComplete(completionCandidates.get(highlighted), originalPosition, flowEditorPane.getCaretPosition(), suggestionList);
                     }
                 }
 
@@ -3308,9 +3375,9 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
     }
 
     @Override
-    public void scrollEventOnTextLine(ScrollEvent e)
+    public void scrollEventOnTextLine(ScrollEvent e, BaseEditorPane editorPane)
     {
-        flowEditorPane.scrollEventOnTextLine(e);
+        editorPane.scrollEventOnTextLine(e);
     }
 
     @Override
@@ -3331,6 +3398,18 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
         return flowEditorPane.getLineBoundsOnScreen(line - 1, new Point2D(fxTabbedEditor.getX(), fxTabbedEditor.getY()), fxTabbedEditor.getRenderScaleX(), fxTabbedEditor.getRenderScaleY());
     }
 
+    @Override
+    public void addDocumentListener(DocumentListener documentListener)
+    {
+        document.addListener(false, documentListener);
+    }
+
+    @Override
+    public void removeDocumentListener(DocumentListener documentListener)
+    {
+        document.removeListener(documentListener);
+    }
+
     /**
      * Prints source code from Editor
      *
@@ -3340,7 +3419,6 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
     @OnThread(Tag.FXPlatform)
     public FXRunnable printTo(PrinterJob printerJob, PrintSize printSize, boolean printLineNumbers, boolean printScopeBackgrounds, PrintProgressUpdate progressUpdate)
     {
-        SimpleDoubleProperty height = new SimpleDoubleProperty();
         Document doc = new HoleDocument();
         doc.replaceText(0, 0, document.getFullContent());
         OffScreenFlowEditorPaneListener flowEditorPaneListener = new OffScreenFlowEditorPaneListener();
@@ -3361,7 +3439,7 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
                 break;
         }
         fontCSS = "-fx-font-size: " + fontSize + ";" + PrefMgr.getEditorFontFamilyCSS();
-        LineDisplay lineDisplay = new LineDisplay(height::get, new ReadOnlyDoubleWrapper(0), new ReadOnlyStringWrapper(fontCSS), flowEditorPaneListener);
+        LineDisplay lineDisplay = new LineDisplay(new ReadOnlyDoubleWrapper(0), new ReadOnlyStringWrapper(fontCSS), true, flowEditorPaneListener);
         // TODO apply syntax highlighting
         LineContainer lineContainer = new LineContainer(lineDisplay, true);
         LineStyler[] lineStylerWrapper = new LineStyler[] {(i, s) -> Collections.singletonList(new StyledSegment(Collections.emptyList(), s.toString()))};
@@ -3425,7 +3503,7 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
             @Override
             public double getTextDisplayWidth()
             {
-                return lineContainer.getWidth() - MarginAndTextLine.TEXT_LEFT_EDGE;
+                return lineContainer.getTextDisplayWidth();
             }
 
             @Override
@@ -3451,7 +3529,7 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
         }, flowEditorPaneListener, this.javaSyntaxView.getEntityResolver(), PrefMgr.flagProperty(PrefMgr.HIGHLIGHTING));
         javaSyntaxView.enableParser(true);
         StyledLines allLines = new StyledLines(doc, lineStylerWrapper[0]);
-        lineContainer.getChildren().setAll(lineDisplay.recalculateVisibleLines(allLines, Math::ceil, 0, printerJob.getJobSettings().getPageLayout().getPrintableWidth(), height.get(), true));
+        lineContainer.getChildren().setAll(lineDisplay.recalculateVisibleLines(allLines, Math::ceil, 0, printerJob.getJobSettings().getPageLayout().getPrintableWidth(), lineContainer.getHeight(), true, null));
 
         // Note: very important we make this call before copyFrom, as copyFrom is what triggers
         // the run-later that marking as printing suppresses:
@@ -3554,7 +3632,7 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
 
             // Scroll to make topLine actually at the top:
             lineDisplay.scrollTo(topLine, 0);
-            List<MarginAndTextLine> lines = lineDisplay.recalculateVisibleLines(allLines, Math::ceil, 0, printerJob.getJobSettings().getPageLayout().getPrintableWidth(), lineContainer.getHeight(), true);
+            List<MarginAndTextLine> lines = lineDisplay.recalculateVisibleLines(allLines, Math::ceil, 0, printerJob.getJobSettings().getPageLayout().getPrintableWidth(), lineContainer.getHeight(), true, null);
             for (MarginAndTextLine line : lines)
             {
                 line.setMarginGraphics(printLineNumbers ? EnumSet.of(MarginDisplay.LINE_NUMBER) : EnumSet.noneOf(MarginDisplay.class));
@@ -3678,6 +3756,7 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
 
         public ErrorDisplay(FlowEditor flowEditor, Supplier<EditorWatcher> editorWatcherSupplier, ErrorDetails details)
         {
+            super(details.identifier, details.message);
             this.details = details;
             this.editorWatcherSupplier = editorWatcherSupplier;
             this.flowEditor = flowEditor;
@@ -3689,8 +3768,9 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
         }
 
         @OnThread(Tag.FXPlatform)
-        void executeQuickFix(){
-            super.executeSelectedFix();
+        void executeQuickFix()
+        {
+            super.executeAndRecordSelectedFix(editorWatcherSupplier);
         }
 
         @Override
@@ -3731,7 +3811,7 @@ public class FlowEditor extends ScopeColorsBorderPane implements TextEditor, Flo
             }
 
             errorVBox.getChildren().add(tf);
-            prepareFixDisplay(errorVBox, details.corrections, editorWatcherSupplier, details.identifier);
+            prepareFixDisplay(errorVBox, details.corrections, editorWatcherSupplier);
 
             JavaFXUtil.addStyleClass(tf, "error-label");
             this.popup.setSkin(new Skin<Skinnable>()

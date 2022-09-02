@@ -1,6 +1,6 @@
 /*
  This file is part of the BlueJ program. 
- Copyright (C) 1999-2009,2010,2011,2012,2013,2016,2017,2018,2019,2020  Michael Kolling and John Rosenberg
+ Copyright (C) 1999-2009,2010,2011,2012,2013,2016,2017,2018,2019,2020,2021,2022  Michael Kolling and John Rosenberg
  
  This program is free software; you can redistribute it and/or 
  modify it under the terms of the GNU General Public License 
@@ -37,14 +37,20 @@ import bluej.debugmgr.ResultWatcher;
 import bluej.debugmgr.ValueCollection;
 import bluej.parser.TextAnalyzer;
 import bluej.pkgmgr.PkgMgrFrame;
+import bluej.pkgmgr.PkgMgrFrame.PkgMgrPane;
 import bluej.pkgmgr.Project;
 import bluej.prefmgr.PrefMgr;
 import bluej.testmgr.record.InvokerRecord;
 import bluej.utility.Utility;
+import bluej.utility.javafx.AbstractOperation;
+import bluej.utility.javafx.AbstractOperation.Combine;
+import bluej.utility.javafx.AbstractOperation.ContextualItem;
 import bluej.utility.javafx.FXPlatformRunnable;
 import bluej.utility.javafx.JavaFXUtil;
 import javafx.beans.binding.Bindings;
 import javafx.beans.binding.BooleanBinding;
+import javafx.beans.binding.ObjectBinding;
+import javafx.beans.property.ReadOnlyStringWrapper;
 import javafx.collections.ListChangeListener;
 import javafx.geometry.Bounds;
 import javafx.geometry.Point2D;
@@ -110,7 +116,7 @@ import java.util.stream.Collectors;
  */
 @OnThread(Tag.FXPlatform)
 public class CodePad extends VBox
-    implements ValueCollection, PkgMgrFrame.PkgMgrPane
+    implements ValueCollection
 {
     /**
      * The list view containing all the history items:
@@ -127,38 +133,40 @@ public class CodePad extends VBox
      */
     private final Pane arrowOverlay;
     private BooleanBinding shadowShowing;
+    private ObjectBinding shadowShowBinding;
+    private ContextMenu contextMenu;
 
+    // Different styles used for the rows
+    @OnThread(Tag.Any)
+    public enum RowStyle
+    {
+        COMMAND_PARTIAL("bj-codepad-cmd-partial"),
+        COMMAND_END("bj-codepad-cmd-end"),
+        ERROR("bj-codepad-error"),
+        OUTPUT("bj-codepad-output");
+
+        private final String pseudo;
+
+        public String getPseudoClass()
+        {
+            return pseudo;
+        }
+
+        private RowStyle(String pseudo)
+        {
+            this.pseudo = pseudo;
+        }
+    }
+    
     /**
      * A data item which backs a single row in the code pad.
      * This might be the currently edited row (the last row), or
      * a read-only item detailing a past command or command outcome;
      */
-    private abstract static @OnThread(Tag.FX) class HistoryRow
+    private abstract @OnThread(Tag.FX) class HistoryRow implements ContextualItem<HistoryRow>
     {
         // Text content of the row
         private final String text;
-
-        // Different styles used for the rows
-        @OnThread(Tag.Any)
-        public static enum RowStyle
-        {
-            COMMAND_PARTIAL("bj-codepad-cmd-partial"),
-            COMMAND_END("bj-codepad-cmd-end"),
-            ERROR("bj-codepad-error"),
-            OUTPUT("bj-codepad-output");
-
-            private final String pseudo;
-
-            public String getPseudoClass()
-            {
-                return pseudo;
-            }
-
-            private RowStyle(String pseudo)
-            {
-                this.pseudo = pseudo;
-            }
-        }
 
         public HistoryRow(String text)
         {
@@ -176,10 +184,17 @@ public class CodePad extends VBox
         public abstract Node getGraphic();
         /** Gets the graphical style that should be used for displaying this row. */
         public abstract RowStyle getStyle();
+
+        @Override
+        @OnThread(Tag.FXPlatform)
+        public List<? extends AbstractOperation<HistoryRow>> getContextOperations()
+        {
+            return List.of(new CopyOperation(), new ClearOperation(), new SelectAllOperation());
+        }
     }
 
     @OnThread(Tag.FX)
-    public static abstract class IndentedRow extends HistoryRow
+    public abstract class IndentedRow extends HistoryRow
     {
         // Crude way of making sure all lines are spaced the same as ones with an object image;
         // use an invisible rectangle as a spacer:
@@ -200,10 +215,10 @@ public class CodePad extends VBox
     // Handy array with all the different row pseudo-class styles.
     private static final String[] allRowStyles;
     static {
-        allRowStyles = new String[HistoryRow.RowStyle.values().length];
-        for (int i = 0; i < HistoryRow.RowStyle.values().length; i++)
+        allRowStyles = new String[RowStyle.values().length];
+        for (int i = 0; i < RowStyle.values().length; i++)
         {
-            allRowStyles[i] = HistoryRow.RowStyle.values()[i].getPseudoClass();
+            allRowStyles[i] = RowStyle.values()[i].getPseudoClass();
         }
     }
 
@@ -214,7 +229,7 @@ public class CodePad extends VBox
      * of commands, but currently don't use it differently in the CSS file.
      */
     @OnThread(Tag.FX)
-    private static class CommandRow extends HistoryRow
+    private class CommandRow extends HistoryRow
     {
         private final boolean isFinalLine;
         public CommandRow(String text, boolean isFinalLine)
@@ -247,10 +262,12 @@ public class CodePad extends VBox
         private final ImageView graphic;
         private Path arrow;
         private FXPlatformRunnable cancelAddToBench;
+        private final ObjectInfo objInfo;
 
         public OutputSuccessRow(String text, ObjectInfo objInfo)
         {
             super(text);
+            this.objInfo = objInfo;
             if (objInfo != null)
             {
                 graphic = new ImageView(objectImage);
@@ -280,9 +297,7 @@ public class CodePad extends VBox
                         // single-click transfer will be cancelled in favour of the double-click
                         // inspect.
                         cancelAddToBench = JavaFXUtil.runAfter(Duration.millis(500), () -> JavaFXUtil.runAfterCurrent(() -> {
-                            Stage fxWindow = frame.getWindow();
-                            Point2D from = graphic.localToScene(new Point2D(0.0, 0.0));
-                            frame.getPackage().getEditor().raisePutOnBenchEvent(fxWindow, objInfo.obj, objInfo.obj.getGenType(), objInfo.ir, true, Optional.of(from));
+                            addResultToBench();
                             cancelAddToBench = null;
                         }));
                         e.consume();
@@ -295,11 +310,7 @@ public class CodePad extends VBox
                             cancelAddToBench.run();
                             cancelAddToBench = null;
                         }
-                        Project project = frame.getProject();
-                        if (project != null)
-                        {
-                            project.getInspectorInstance(objInfo.obj, "", frame.getPackage(), objInfo.ir, frame.getWindow(), graphic).bringToFront();
-                        }
+                        inspectResult();
                         e.consume();
                     }
                 });
@@ -335,6 +346,24 @@ public class CodePad extends VBox
                 graphic = null;
         }
 
+        @OnThread(Tag.FXPlatform)
+        private void inspectResult()
+        {
+            Project project = frame.getProject();
+            if (project != null)
+            {
+                project.getInspectorInstance(objInfo.obj, "", frame.getPackage(), objInfo.ir, frame.getWindow(), graphic).bringToFront();
+            }
+        }
+
+        @OnThread(Tag.FXPlatform)
+        private void addResultToBench()
+        {
+            Stage fxWindow = frame.getWindow();
+            Point2D from = graphic.localToScene(new Point2D(0.0, 0.0));
+            frame.getPackage().getEditor().raisePutOnBenchEvent(fxWindow, objInfo.obj, objInfo.obj.getGenType(), objInfo.ir, true, Optional.of(from));
+        }
+
         // Graphic is an object icon if applicable, otherwise
         // we use the invisible spacer from the parent:
         @Override
@@ -348,13 +377,68 @@ public class CodePad extends VBox
         {
             return RowStyle.OUTPUT;
         }
+
+        @Override
+        @OnThread(Tag.FXPlatform)
+        public List<? extends AbstractOperation<HistoryRow>> getContextOperations()
+        {
+            ArrayList<AbstractOperation<HistoryRow>> ops = new ArrayList<>(super.getContextOperations());
+            if (objInfo != null)
+            {
+                ops.add(new AbstractOperation<HistoryRow>("addtobench", Combine.ONE, null)
+                {
+                    @Override
+                    public void activate(List<HistoryRow> historyRows)
+                    {
+                        for (HistoryRow historyRow : historyRows)
+                        {
+                            if (historyRow instanceof OutputSuccessRow)
+                            {
+                                OutputSuccessRow o = (OutputSuccessRow) historyRow;
+                                if (o.objInfo != null)
+                                    o.addResultToBench();
+                            }
+                        }
+                    }
+
+                    @Override
+                    public List<ItemLabel> getLabels()
+                    {
+                        return List.of(new ItemLabel(new ReadOnlyStringWrapper(Config.getString("codepad.addToBench")), MenuItemOrder.CODEPAD_ADD_TO_BENCH));
+                    }
+                });
+                ops.add(new AbstractOperation<HistoryRow>("inspect", Combine.ONE, null)
+                {
+                    @Override
+                    public void activate(List<HistoryRow> historyRows)
+                    {
+                        for (HistoryRow historyRow : historyRows)
+                        {
+                            if (historyRow instanceof OutputSuccessRow)
+                            {
+                                OutputSuccessRow o = (OutputSuccessRow) historyRow;
+                                if (o.objInfo != null)
+                                    o.inspectResult();
+                            }
+                        }
+                    }
+
+                    @Override
+                    public List<ItemLabel> getLabels()
+                    {
+                        return List.of(new ItemLabel(new ReadOnlyStringWrapper(Config.getString("codepad.inspect")), MenuItemOrder.CODEPAD_INSPECT));
+                    }
+                });
+            }
+            return ops;
+        }
     }
 
     /**
      * A row with an error output of a previous command.
      */
     @OnThread(Tag.FX)
-    private static class ErrorRow extends IndentedRow
+    private class ErrorRow extends IndentedRow
     {
         public ErrorRow(String text)
         {
@@ -409,8 +493,11 @@ public class CodePad extends VBox
         inputField.setFocusTraversable(true);
         inputField.setEditable(true);
         historyView = new ListView<>();
-        historyView.setFocusTraversable(false);
         historyView.setEditable(false);
+        JavaFXUtil.addFocusListener(historyView, focused -> {
+            if (focused && historyView.getSelectionModel().isEmpty())
+                historyView.getSelectionModel().selectLast();
+        });
 
         inputField.styleProperty().bind(PrefMgr.getEditorFontCSS(false));
         historyView.styleProperty().bind(PrefMgr.getEditorFontCSS(false));
@@ -436,7 +523,8 @@ public class CodePad extends VBox
                 ScrollBar scrollBar = (ScrollBar)historyView.lookup(".scroll-bar");
                 // Need to keep a permanent reference to avoid GCing weak reference:
                 shadowShowing = scrollBar.visibleProperty().and(scrollBar.valueProperty().isNotEqualTo(1.0, 0.01));
-                inputField.effectProperty().bind(Bindings.when(shadowShowing).<Effect>then(new DropShadow(6.0, 0.0, -3.0, Color.GRAY)).otherwise((Effect)null));
+                shadowShowBinding = Bindings.when(shadowShowing).<Effect>then(new DropShadow(6.0, 0.0, -3.0, Color.GRAY)).otherwise((Effect)null);
+                inputField.effectProperty().bind(shadowShowBinding);
                 historyView.getItems().removeListener(this);
             }
         });
@@ -452,24 +540,36 @@ public class CodePad extends VBox
         historyView.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
 
         // Add context menu with copy:
-        historyView.setContextMenu(new ContextMenu(
-            JavaFXUtil.makeMenuItem(Config.getString("editor.copyLabel"), () -> copySelectedRows(), null),
-            JavaFXUtil.makeMenuItem(Config.getString("codepad.copyAll"), () -> {
-                historyView.getSelectionModel().selectAll();
-                copySelectedRows();
-            }, null),
-
-            JavaFXUtil.makeMenuItem(Config.getString("codepad.clear"), () -> {
-                historyView.getSelectionModel().clearSelection();
-                historyView.getItems().clear();
-            }, null)
-        ));
+        historyView.setOnContextMenuRequested(e -> {
+            showContextMenu(e.getScreenX(), e.getScreenY());
+        });
+        
+        // Allow "clicking off" the context menu (clicking back on the codepad history) to dismiss it.
+        historyView.addEventFilter(MouseEvent.MOUSE_CLICKED, e -> {
+            if (e.getButton() == MouseButton.PRIMARY && contextMenu != null)
+            {
+                contextMenu.hide();
+                contextMenu = null;
+                // Do not consume the event, still let it select.
+            }
+        });
         
         // Add keyboard shortcut ourselves:
         historyView.addEventFilter(KeyEvent.KEY_PRESSED, e -> {
             if (e.getCode() == KeyCode.C && e.isShortcutDown())
             {
                 copySelectedRows();
+                e.consume();
+            }
+            else if (e.getCode() == KeyCode.A && e.isShortcutDown())
+            {
+                historyView.getSelectionModel().selectAll();
+                e.consume();
+            }
+            else if (e.getCode() == KeyCode.ENTER || e.getCode() == KeyCode.SPACE)
+            {
+                Bounds screenBounds = historyView.localToScreen(historyView.getBoundsInLocal());
+                showContextMenu(screenBounds.getCenterX(), screenBounds.getCenterY());
                 e.consume();
             }
         });
@@ -531,6 +631,14 @@ public class CodePad extends VBox
                 }
             }
         });
+    }
+
+    private void showContextMenu(double screenX, double screenY)
+    {
+        if (contextMenu != null)
+            contextMenu.hide();
+        contextMenu = AbstractOperation.getMenuItems(historyView.getSelectionModel().getSelectedItems(), true).makeContextMenu();
+        contextMenu.show(historyView, screenX, screenY);
     }
 
     private void copySelectedRows()
@@ -1038,9 +1146,14 @@ public class CodePad extends VBox
         }
     }
 
-    public void focusInputField()
+    public PkgMgrPane getHistoryPane()
     {
-        inputField.requestFocus();
+        return () -> historyView;
+    }
+
+    public PkgMgrPane getInputFieldPane()
+    {
+        return () -> inputField;
     }
 
     @OnThread(Tag.Any)
@@ -1097,4 +1210,65 @@ public class CodePad extends VBox
         }
     }
     
+    private static class CopyOperation extends AbstractOperation<HistoryRow>
+    {
+        public CopyOperation()
+        {
+            super("copy", Combine.ALL, null);
+        }
+
+        @Override
+        public void activate(List<HistoryRow> historyRows)
+        {
+            String copied = historyRows.stream().map(HistoryRow::getText).collect(Collectors.joining("\n"));
+            Clipboard.getSystemClipboard().setContent(Collections.singletonMap(DataFormat.PLAIN_TEXT, copied));
+        }
+        
+        @Override
+        public List<ItemLabel> getLabels()
+        {
+            return List.of(new ItemLabel(new ReadOnlyStringWrapper(Config.getString("editor.copyLabel")), MenuItemOrder.CODEPAD_COPY));
+        }
+    }
+
+    private class ClearOperation extends AbstractOperation<HistoryRow>
+    {
+        public ClearOperation()
+        {
+            super("clear", Combine.ANY, null);
+        }
+
+        @Override
+        public void activate(List<HistoryRow> historyRows)
+        {
+            historyView.getSelectionModel().clearSelection();
+            historyView.getItems().clear();
+        }
+
+        @Override
+        public List<ItemLabel> getLabels()
+        {
+            return List.of(new ItemLabel(new ReadOnlyStringWrapper(Config.getString("codepad.clear")), MenuItemOrder.CODEPAD_CLEAR));
+        }
+    }
+
+    private class SelectAllOperation extends AbstractOperation<HistoryRow>
+    {
+        public SelectAllOperation()
+        {
+            super("selectAll", Combine.ANY, null);
+        }
+
+        @Override
+        public void activate(List<HistoryRow> historyRows)
+        {
+            historyView.getSelectionModel().selectAll();
+        }
+
+        @Override
+        public List<ItemLabel> getLabels()
+        {
+            return List.of(new ItemLabel(new ReadOnlyStringWrapper(Config.getString("codepad.selectAll")), MenuItemOrder.CODEPAD_SELECT_ALL));
+        }
+    }
 }

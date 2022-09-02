@@ -1,6 +1,6 @@
 /*
  This file is part of the BlueJ program. 
- Copyright (C) 1999-2013,2016,2017,2018,2019,2020  Michael Kolling and John Rosenberg
+ Copyright (C) 1999-2013,2016,2017,2018,2019,2020,2021,2022  Michael Kolling and John Rosenberg
  
  This program is free software; you can redistribute it and/or 
  modify it under the terms of the GNU General Public License 
@@ -135,6 +135,8 @@ public class AboutDialogTemplate extends Dialog<Void>
                 System.getProperty("java.vm.name") + " " +
                 System.getProperty("java.vm.version") +
                 " (" + System.getProperty("java.vm.vendor") + ")"));
+        bottom.getChildren().add(new Label(Config.getString("about.javafx") + " " +
+            System.getProperty("javafx.runtime.version")));
         bottom.getChildren().add(new Label(Config.getString("about.runningOn") + " " +
                 System.getProperty("os.name") + " " + System.getProperty("os.version") +
                 " (" + System.getProperty("os.arch") + ")"));
@@ -227,12 +229,16 @@ public class AboutDialogTemplate extends Dialog<Void>
             // The width properties add up to 97% and not 100% to forbid the scroll from appearing,
             // as there is no API, currently, to achieve this
             TableColumn<Pair<String, String>, String> languageColumn = new TableColumn<>();
-            languageColumn.prefWidthProperty().bind(tableView.widthProperty().multiply(0.17));
             languageColumn.setCellValueFactory(param -> new ReadOnlyStringWrapper(param.getValue().getKey()));
 
             TableColumn<Pair<String, String>, String> nameColumn = new TableColumn<>();
-            nameColumn.prefWidthProperty().bind(tableView.widthProperty().multiply(0.80));
             nameColumn.setCellValueFactory(param -> new ReadOnlyStringWrapper(param.getValue().getValue()));
+            
+            JavaFXUtil.addChangeListenerAndCallNow(tableView.widthProperty(), newVal -> 
+            {
+                languageColumn.setPrefWidth(newVal.doubleValue() * 0.17);
+                nameColumn. setPrefWidth(newVal.doubleValue() * 0.80);
+            });
 
             tableView.getColumns().setAll(languageColumn, nameColumn);
             vbox.getChildren().add(tableView);

@@ -108,6 +108,11 @@ public class FrameShelf implements InteractionManager, CanvasParent, FrameTypeCh
         storage.registerShelf(this);
     }
 
+    // From Cherry
+    public String getLocationDescription() {
+        return "";
+    }
+
     @Override
     @OnThread(Tag.FXPlatform)
     public void withCompletions(JavaFragment.PosInSourceDoc pos, ExpressionSlot<?> completing, CodeElement codeEl, FXPlatformConsumer<List<AssistContentThreadSafe>> handler)
@@ -463,6 +468,11 @@ public class FrameShelf implements InteractionManager, CanvasParent, FrameTypeCh
     }
 
     @Override
+    public String getLocationDescription(FrameCanvas c) {
+        return null;
+    }
+
+    @Override
     public CanvasKind getChildKind(FrameCanvas c)
     {
         return null; // TODO
@@ -612,5 +622,12 @@ public class FrameShelf implements InteractionManager, CanvasParent, FrameTypeCh
         for (int i = 0; i < framesElement.getChildElements().size(); i++) {
             canvas.insertBlockAfter(Loader.loadElement(framesElement.getChildElements().get(i)).createFrame(this), null);
         }
+    }
+
+    //Manvi jain
+    @Override
+    public String getHelpContext(){
+        //not applicable
+        return "";
     }
 }

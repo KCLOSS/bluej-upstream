@@ -1,6 +1,6 @@
 /*
  This file is part of the BlueJ program. 
- Copyright (C) 2014,2015,2016,2019,2020 Michael Kölling and John Rosenberg
+ Copyright (C) 2014,2015,2016,2019,2020,2021 Michael Kölling and John Rosenberg
  
  This program is free software; you can redistribute it and/or 
  modify it under the terms of the GNU General Public License 
@@ -25,6 +25,7 @@ import javafx.application.Platform;
 import javafx.beans.binding.DoubleExpression;
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
+import javafx.scene.AccessibleAttribute;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.layout.BorderPane;
@@ -52,8 +53,11 @@ class SuggestionCell extends ListCell<SuggestionList.SuggestionListItem> impleme
     {
         this.special = new Label();
         this.type = new Label();
-        this.type.minWidthProperty().bind(typeWidth);
-        this.type.maxWidthProperty().bind(typeWidth);
+        JavaFXUtil.addChangeListenerAndCallNow(typeWidth, newVal -> 
+        {
+           this.type.setMinWidth(newVal.doubleValue());
+           this.type.setMaxWidth(newVal.doubleValue());
+        });
         this.type.setEllipsisString("\u2026");
         this.prefix = new Label();
         this.matching = new Label();
@@ -111,6 +115,19 @@ class SuggestionCell extends ListCell<SuggestionList.SuggestionListItem> impleme
         });
 
         setGraphic(pane);
+    }
+
+    @Override
+    @OnThread(value = Tag.FXPlatform, ignoreParent = true)
+    public Object queryAccessibleAttribute(AccessibleAttribute accessibleAttribute, Object... objects) {
+        switch (accessibleAttribute) {
+            case TEXT:
+                return "Drop down menu in choice slot";
+            case ROLE_DESCRIPTION:
+                return (getItem() != null) ? getItem().getDetails().choice : "";
+            default:
+                return super.queryAccessibleAttribute(accessibleAttribute, objects);
+        }
     }
 
     @OnThread(value = Tag.FXPlatform, ignoreParent = true)
@@ -180,4 +197,6 @@ class SuggestionCell extends ListCell<SuggestionList.SuggestionListItem> impleme
     {
         update(itemProperty().get());
     }
+
+
 }

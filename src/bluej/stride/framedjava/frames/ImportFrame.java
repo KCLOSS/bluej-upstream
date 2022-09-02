@@ -30,6 +30,7 @@ import java.util.stream.Stream;
 
 import bluej.editor.stride.FrameEditor;
 import bluej.parser.AssistContent.Access;
+import bluej.stride.generic.*;
 import bluej.stride.framedjava.elements.LocatableElement.LocationMap;
 import bluej.utility.javafx.JavaFXUtil;
 import javafx.application.Platform;
@@ -44,10 +45,6 @@ import bluej.stride.framedjava.elements.CodeElement;
 import bluej.stride.framedjava.elements.ImportElement;
 import bluej.stride.framedjava.elements.ImportElement.ImportFragment;
 import bluej.stride.framedjava.errors.CodeError;
-import bluej.stride.generic.FrameFactory;
-import bluej.stride.generic.InteractionManager;
-import bluej.stride.generic.RecallableFocus;
-import bluej.stride.generic.SingleLineFrame;
 import bluej.stride.slots.TextSlot;
 import bluej.stride.slots.HeaderItem;
 import bluej.stride.slots.SlotTraversalChars;
@@ -182,6 +179,9 @@ public class ImportFrame extends SingleLineFrame implements CodeFrame<ImportElem
             }
         });
         setHeaderRow(importField, previewSemi);
+
+        //cherry
+        frameName = "import statement";
     }
     
     /**
@@ -221,6 +221,23 @@ public class ImportFrame extends SingleLineFrame implements CodeFrame<ImportElem
         };
     }
 
+    //cherry
+    public String getScreenReaderText() {
+        String fieldString;
+        fieldString = (importField.getText().equals(""))? "blank" : importField.getText();
+        return "import " + fieldString;
+    }
+
+    //cherry
+    /**
+     * Get the help text of this frame, to pass to setAccessibilityHelp().
+     * Calls the parent frame if there is one, to get the parent's description
+     * plus the descriptions of that parent's parents.
+     */
+    public String getScreenReaderHelp() {
+        return "you are " + getParentCanvas().getParentLocationDescription();
+    }
+
     public String getImport()
     {
         return importField.getText();
@@ -230,6 +247,17 @@ public class ImportFrame extends SingleLineFrame implements CodeFrame<ImportElem
     public void regenerateCode()
     {
         element = new ImportElement(importField.getText(), importField, frameEnabledProperty.get());
+    }
+
+    //cherry
+    @Override
+    public void updateAppearance(FrameCanvas parentCanvas) {
+        super.updateAppearance(parentCanvas);
+        if(getParentCanvas() != null && getParentCanvas().getParent() != null)
+        {
+            importField.setSlotName("import value slot");
+            importField.setScreenReaderHelpSlots();
+        }
     }
 
     @Override

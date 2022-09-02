@@ -109,6 +109,18 @@ class InheritedCanvas
                 return classFrame;
             }
 
+            //cherry
+            @Override
+            public String getLocationDescription(FrameCanvas c)
+            {
+                return " in the class " + (
+                        (editor.nameProperty().get() != null)?
+                                editor.nameProperty().get() :
+                                "[editor name property null in InheritedCanvas]"
+                );
+            }
+
+
             @Override
             public InteractionManager getEditor()
             {
@@ -120,6 +132,14 @@ class InheritedCanvas
             {
                 // No need to do anything on modification, as it was programmatic
             }
+
+            //Manvi jain
+            @Override
+            public String getHelpContext()
+            {
+                return "" ;
+            }
+
         }, "class-inherited-")
         {
 

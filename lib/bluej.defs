@@ -105,9 +105,9 @@ bluej.language20=swedish:Swedish:swe
 ## edit these URLs.
 #####################################################################
 
-bluej.url.bluej=http://www.bluej.org
-bluej.url.onlinedoc=http://www.bluej.org/doc/documentation.html
-bluej.url.reference=http://www.bluej.org/reference/manual.pdf
+bluej.url.bluej=https://www.bluej.org
+bluej.url.onlinedoc=https://www.bluej.org/doc/documentation.html
+bluej.url.reference=https://www.bluej.org/reference/manual.pdf
 
 # The URL for the Java API documentation can be specified here, however
 # this will only apply the first time you use BlueJ. After that, the
@@ -125,7 +125,7 @@ bluej.url.javaStdLib=https://docs.oracle.com/en/java/javase/11/docs/api/
 
 
 # do not change the following:
-bluej.url.versionCheck=http://www.bluej.org/version.info
+bluej.url.versionCheck=https://www.bluej.org/version.info
 
 
 #####################################################################
@@ -144,9 +144,9 @@ bluej.url.versionCheck=http://www.bluej.org/version.info
 
 #bluej.help.items=myCustomLib courseInfo
 #bluej.help.myCustomLib.label=My CS1 libraries
-#bluej.help.myCustomLib.url=http://www.google.com/
+#bluej.help.myCustomLib.url=https://www.google.com/
 #bluej.help.courseInfo.label=CS1 course info
-#bluej.help.courseInfo.url=http://www.bluej.org/help/archive.html
+#bluej.help.courseInfo.url=https://www.bluej.org/help/archive.html
 
 
 #####################################################################
@@ -418,20 +418,14 @@ bluej.teamwork.showtools=false
 ## If this attribute is not specified, the compiler is run with
 ## default options.
 ## 
-## The following options will ALWAYS be added internally in BlueJ. If
-## you change these, funny things might happen (such as BlueJ not 
-## working at all!):
+## The following options will ALWAYS be added internally in BlueJ:
 ##
 ## -deprecation (Show description of each use of a deprecated method)
 ## -g           (Generate all debugging information)
-## -d           (set the output directory)
-##
-## The following is also added internally, but is safe to change:
-## -source      (set by BlueJ to the version of the JDK)
 ##
 #####################################################################
 
-#bluej.compiler.options=-source 1.4 -target 1.4
+#bluej.compiler.options=--release 11
 
 # Whether to show the "unchecked" warnings generated when using generic
 # classes in a non-typesafe manner (java 1.5+ only)

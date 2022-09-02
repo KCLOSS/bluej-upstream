@@ -1,6 +1,6 @@
 /*
  This file is part of the BlueJ program. 
- Copyright (C) 1999-2010,2011,2012,2013,2014,2015,2016,2017,2018,2019,2020,2021  Michael Kolling and John Rosenberg
+ Copyright (C) 1999-2010,2011,2012,2013,2014,2015,2016,2017,2018,2019,2020,2021,2022  Michael Kolling and John Rosenberg
 
  This program is free software; you can redistribute it and/or 
  modify it under the terms of the GNU General Public License 
@@ -41,6 +41,7 @@ import bluej.utility.javafx.FXPlatformConsumer;
 import bluej.utility.javafx.FXPlatformRunnable;
 import bluej.utility.javafx.JavaFXUtil;
 import javafx.beans.binding.Bindings;
+import javafx.beans.binding.ObjectBinding;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableMap;
 import javafx.scene.input.*;
@@ -525,11 +526,15 @@ public final class FlowActions
      */
     public static void addKeyCombinationForActionToAllEditors(KeyCodeCombination key, String actionName)
     {
-        allActions.values().forEach(flowAction -> flowAction.addKeyCombinationForAction(key, actionName));
+        allActions.values().forEach(flowAction -> {
+            flowAction.addKeyCombinationForAction(key, actionName);
+            flowAction.updateKeymap();
+        });
     }
 
     /**
      * Add a new key binding into the action table.
+     * Will not take effect until you call updateKeymap() afterwards.
      */
     private void addKeyCombinationForAction(KeyCodeCombination key, String actionName)
     {
@@ -537,7 +542,6 @@ public final class FlowActions
         if (action != null)
         {
             keymap.put(key, action);
-            updateKeymap();
         }
     }
 
@@ -637,6 +641,7 @@ public final class FlowActions
                                 ModifierValue.valueOf(split[4])
                             ), split[6]);
                     }
+                    updateKeymap();
                     return true;
                 }
                 catch (IllegalArgumentException | ArrayIndexOutOfBoundsException e)
@@ -706,6 +711,7 @@ public final class FlowActions
                 {
                     addKeyCombinationForAction(new KeyCodeCombination(KeyCode.DIGIT0, KeyCombination.SHORTCUT_DOWN), "reset-font");
                 }
+                updateKeymap();
                 return true;
             }
         }
@@ -1163,6 +1169,8 @@ public final class FlowActions
         addKeyCombinationForAction(new KeyCodeCombination(KeyCode.NUMPAD0, SHORTCUT_MASK), "reset-font"); //support of the numpad 0
         addKeyCombinationForAction(new KeyCodeCombination(KeyCode.SPACE, KeyCombination.CONTROL_DOWN), "code-completion");
         addKeyCombinationForAction(new KeyCodeCombination(KeyCode.I, SHIFT_SHORTCUT_MASK), "autoindent");
+        
+        updateKeymap();
     }
 
     private FlowAbstractAction action(String name, Category category, FXPlatformRunnable action)
@@ -1219,13 +1227,18 @@ public final class FlowActions
     public abstract class FlowAbstractAction extends FXAbstractAction
     {
         private final Category category;
+        private final ObjectBinding<KeyCombination> accelatorBinding;
+
 
         public FlowAbstractAction(String name, Category category)
         {
             super(name);
-            this.accelerator.bind(Bindings.createObjectBinding(() -> {
+            //save the binding object to avoid a weak reference that can be GCed
+            accelatorBinding = Bindings.createObjectBinding(() -> 
+            {
                 return keymap.entrySet().stream().filter(e -> e.getValue().equals(this)).map(e -> e.getKey()).findFirst().orElse(null);
-            }, keymap));
+            }, keymap);
+            this.accelerator.bind(accelatorBinding);
             this.category = category;
         }
 
@@ -1542,9 +1555,16 @@ public final class FlowActions
         });
     }
 
+    /**
+     * Copies the selection to the clipboard.  Does nothing if the selection is empty.
+     */
     private void copySelectionToClipboard()
     {
-        Clipboard.getSystemClipboard().setContent(Map.of(DataFormat.PLAIN_TEXT, editor.getSourcePane().getSelectedText()));
+        String selectedText = editor.getSourcePane().getSelectedText();
+        if (!selectedText.isEmpty())
+        {
+            Clipboard.getSystemClipboard().setContent(Map.of(DataFormat.PLAIN_TEXT, selectedText));
+        }
     }
 
     private FlowAbstractAction pasteAction()
@@ -1794,10 +1814,14 @@ public final class FlowActions
                 int lineStart = document.getLineStart(curLine);
                 int contentStart = lineStart;
                 int lineEnd = document.getLineEnd(curLine);
-                // Move it to the first non-whitespace character:
-                while (Character.isWhitespace(getTextComponent().getDocument().getContent(contentStart, contentStart + 1).charAt(0)) && contentStart < lineEnd)
-                    contentStart += 1;
-
+                // If the line is non-empty:
+                if (lineEnd > lineStart)
+                {
+                    // Move it to the first non-whitespace character:
+                    while (Character.isWhitespace(getTextComponent().getDocument().getContent(contentStart, contentStart + 1).charAt(0)) && contentStart < lineEnd)
+                        contentStart += 1;
+                }
+                
                 if (getTextComponent().getCaretPosition() == contentStart)
                 {
                     moveCaret(lineStart);

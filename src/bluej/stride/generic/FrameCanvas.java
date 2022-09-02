@@ -184,6 +184,30 @@ public class FrameCanvas implements FrameContentItem
         return parentBlock;
     }
 
+    //cherry
+    public String getParentLocationDescription()
+    {
+        // if this canvas has no parent, (if i'm not wrong) it means this
+        // canvas is exposed in the class, so the 'parent' is the class
+        if(getParent() != null && getParent().getLocationDescription(this) != null)
+        {
+            return getParent().getLocationDescription(this);
+        }
+        else
+        {
+            try
+            {
+                return " in the class " + editorFrm.nameProperty().get();
+            }
+            catch (Exception e)
+            {
+                return " in the class [Undefined in editor name property] ";
+            }
+        }
+
+
+    }
+
     public VBox getSpecialBefore(FrameCursor cursor)
     {
         int index = 0;
@@ -702,7 +726,7 @@ public class FrameCanvas implements FrameContentItem
             clipRect.heightProperty().bind(canvas.maxHeightProperty());
             canvas.setClip(clipRect);
 
-            canvas.maxHeightProperty().bind(animate.multiply(getHeight()));
+            JavaFXUtil.addChangeListenerAndCallNow(animate, newVal -> canvas.setMaxHeight(newVal.doubleValue() * getHeight()));
             canvas.prefHeightProperty().bind(canvas.maxHeightProperty());
 
             // Make the contents look like it is shrinking:
@@ -732,7 +756,8 @@ public class FrameCanvas implements FrameContentItem
             calcHeight += cursors.stream().mapToDouble(f -> f.getNode().getHeight()).sum();
             calcHeight += Math.max(0, blockContents.size() - 1) * canvas.spacingProperty().get();
 
-            canvas.maxHeightProperty().bind(animate.multiply(calcHeight));
+            final double finalCalcHeight = calcHeight;
+            JavaFXUtil.addChangeListenerAndCallNow(animate, newVal -> canvas.setMaxHeight(newVal.doubleValue() * finalCalcHeight));
         }
         // We keep on the previous effect and clip until we have reached full height
         
@@ -838,7 +863,7 @@ public class FrameCanvas implements FrameContentItem
     /**
      * Empty the canvas of block contents, and move them all to the target canvas, starting at the specified index (in that canvas's children)
      * @param targetCanvas canvas to export contents to
-     * @param index  starting index in other canvas to insert at
+     * @param after  starting frame in other canvas to insert after
      */
     public void emptyTo(FrameCanvas targetCanvas, Frame after)
     {

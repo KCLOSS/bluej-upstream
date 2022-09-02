@@ -1,6 +1,6 @@
 /*
  This file is part of the BlueJ program. 
- Copyright (C) 2014,2015,2016,2019,2020 Michael Kölling and John Rosenberg
+ Copyright (C) 2014,2015,2016,2019,2020,2022 Michael Kölling and John Rosenberg
  
  This program is free software; you can redistribute it and/or 
  modify it under the terms of the GNU General Public License 
@@ -71,6 +71,7 @@ public class ErrorAndFixDisplay extends FixDisplayManager
     
     public ErrorAndFixDisplay(InteractionManager editor, String prefix, CodeError err, ErrorFixListener slot)
     {
+        super(err.getIdentifier(), err.getMessage());
         this.editor = editor;
         this.error = err;
         this.slot = slot;
@@ -94,7 +95,7 @@ public class ErrorAndFixDisplay extends FixDisplayManager
         }
         JavaFXUtil.addStyleClass(errorLabel, "error-label");
         vbox.getChildren().add(errorLabel);
-        prepareFixDisplay(vbox, (List<FixSuggestion>) err.getFixSuggestions(), () -> editor.getFrameEditor().getWatcher(), err.getIdentifier());
+        prepareFixDisplay(vbox, (List<FixSuggestion>) err.getFixSuggestions(), () -> editor.getFrameEditor().getWatcher());
         CodeOverlayPane.setDropShadow(vbox);
     }
     
@@ -178,8 +179,7 @@ public class ErrorAndFixDisplay extends FixDisplayManager
     {
         if (highlighted != -1)
         {
-            recordExecute(() -> editor.getFrameEditor().getWatcher(), highlighted);
-            error.getFixSuggestions().get(highlighted).execute();
+            executeAndRecordSelectedFix(() -> editor.getFrameEditor().getWatcher());
             ErrorAndFixDisplay.this.hide();
             slot.fixedError(error);
         }

@@ -26,6 +26,7 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.stream.Stream;
 
+import bluej.stride.generic.ScreenreaderDictionary;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.scene.Node;
@@ -157,6 +158,13 @@ class BracketedStructured<INFIX extends InfixStructured<SLOT, INFIX>, SLOT exten
             b.append(closing);
         
         return b.toString();
+    }
+
+    //cherry
+    public String getScreenreaderText() {
+        return ScreenreaderDictionary.transcribeForScreenreader(String.valueOf(opening)) +
+                content.getScreenreaderText() +
+                ScreenreaderDictionary.transcribeForScreenreader(String.valueOf(closing));
     }
     
     @Override

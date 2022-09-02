@@ -1,6 +1,6 @@
 /*
  This file is part of the BlueJ program. 
- Copyright (C) 2019,2020,2021  Michael Kolling and John Rosenberg
+ Copyright (C) 2019,2020,2021,2022  Michael Kolling and John Rosenberg
 
  This program is free software; you can redistribute it and/or 
  modify it under the terms of the GNU General Public License 
@@ -22,49 +22,54 @@
 package bluej.editor.flow;
 
 import bluej.Config;
+import bluej.editor.base.BackgroundItem;
+import bluej.editor.base.BaseEditorPane;
+import bluej.editor.base.EditorPosition;
+import bluej.editor.base.LineDisplay;
+import bluej.editor.base.MarginAndTextLine;
+import bluej.editor.base.TextLine;
 import bluej.editor.flow.Document.Bias;
-import bluej.editor.flow.LineDisplay.LineDisplayListener;
-import bluej.editor.flow.MarginAndTextLine.MarginDisplay;
-import bluej.editor.flow.TextLine.HighlightType;
-import bluej.editor.flow.TextLine.StyledSegment;
+import bluej.editor.base.LineDisplay.LineDisplayListener;
+import bluej.editor.base.MarginAndTextLine.MarginDisplay;
+import bluej.editor.base.TextLine.HighlightType;
+import bluej.editor.base.TextLine.StyledSegment;
 import bluej.prefmgr.PrefMgr;
 import bluej.utility.javafx.JavaFXUtil;
 import javafx.collections.ObservableList;
 import javafx.geometry.Bounds;
-import javafx.geometry.Orientation;
 import javafx.geometry.Point2D;
 import javafx.geometry.Rectangle2D;
 import javafx.scene.AccessibleAttribute;
-import javafx.scene.AccessibleRole;
 import javafx.scene.Node;
-import javafx.scene.Scene;
-import javafx.scene.control.ContextMenu;
 import javafx.scene.control.IndexRange;
-import javafx.scene.control.ScrollBar;
+import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
 import javafx.scene.input.MouseButton;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.input.ScrollEvent;
 import javafx.scene.layout.BackgroundFill;
 import javafx.scene.layout.Region;
-import javafx.scene.paint.Color;
 import javafx.scene.shape.LineTo;
 import javafx.scene.shape.MoveTo;
 import javafx.scene.shape.Path;
 import javafx.scene.shape.PathElement;
-import javafx.scene.shape.Rectangle;
 import javafx.scene.text.Font;
 import javafx.scene.text.Text;
-import javafx.util.Duration;
-import org.fxmisc.wellbehaved.event.InputMap;
-import org.fxmisc.wellbehaved.event.Nodes;
 import threadchecker.OnThread;
 import threadchecker.Tag;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.Writer;
-import java.util.*;
+import java.util.AbstractList;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /**
@@ -74,10 +79,8 @@ import java.util.stream.Stream;
  * as a virtualised container.  Scrolling re-renders the currently visible line set.
  */
 @OnThread(value = Tag.FXPlatform, ignoreParent = true)
-public class FlowEditorPane extends Region implements JavaSyntaxView.Display
+public class FlowEditorPane extends BaseEditorPane implements JavaSyntaxView.Display
 {
-    public static final Duration SCROLL_DELAY = Duration.millis(50);
-    private final LineDisplay lineDisplay;
     private final FlowEditorPaneListener listener;
 
     private final HoleDocument document;
@@ -89,31 +92,15 @@ public class FlowEditorPane extends Region implements JavaSyntaxView.Display
     // if you want it to persist, you will need to set it again manually afterwards.
     // Note: this is 1-based (first column is 1) to fit in more easily with SourceLocation.
     private int targetColumnForVerticalMovement;
-    private final Path caretShape;
+    
     
     // Default is to apply no styles:
     private LineStyler lineStyler = (i, s) -> Collections.singletonList(new StyledSegment(Collections.emptyList(), s.toString()));
     
     private ErrorQuery errorQuery = () -> Collections.emptyList();
-    
-    private final LineContainer lineContainer;
-    private final ScrollBar verticalScroll;
-    private final ScrollBar horizontalScroll;
-    private boolean updatingScrollBarDirectly = false;
-    // Scroll bars can be turned off for testing and printing:
-    private boolean allowScrollBars = true;
-    
-    private final ArrayList<SelectionListener> selectionListeners = new ArrayList<>();
-    private boolean postScrollRenderQueued = false;
-    private boolean editable = true;
-    private boolean forceCaretShow = false;
-    // The pending amount to scroll by (mouse/touch scroll events are batched up)
-    private double pendingScrollY;
-    // Have we currently scheduled an update of the caret graphics?  If so, no need to schedule another.
-    private boolean caretUpdateScheduled;
-    // If we have currently scheduled an update of the caret graphics, will we ensure caret is visible?
-    private boolean caretUpdateEnsureVisible;
 
+    private boolean editable = true;
+    
     // Tracked for the purposes of smart bracket adding.  We set this to true when
     // the user types an '{'.  We set it to false when they either:
     //   - type anything else
@@ -122,17 +109,9 @@ public class FlowEditorPane extends Region implements JavaSyntaxView.Display
     // situations (like: "typed '{', pasted some content" or "typed '{' then went up a line and pressed enter").
     private boolean justAddedOpeningCurlyBracket;
 
-    // For when the user is dragging the mouse (or just holding the button down with it stationary)
-    // and the pointer is out of our bounds, requiring us to scroll:
-    private static enum DragScroll { UP_FAST, UP, DOWN, DOWN_FAST }
-    private boolean isDragScrollScheduled = false;
-    // Null when there's no current drag scroll:
-    private DragScroll offScreenDragScroll = null;
-    private double offScreenDragX = 0;
-    private double offScreenDragY = 0;
-
     public FlowEditorPane(String content, FlowEditorPaneListener listener)
     {
+        super(true, listener);
         this.listener = listener;
         setSnapToPixel(true);
         document = new HoleDocument();
@@ -140,89 +119,17 @@ public class FlowEditorPane extends Region implements JavaSyntaxView.Display
         caret = document.trackPosition(0, Bias.FORWARD);
         // Important that the anchor is a different object to the caret, as they will move independently:
         anchor = document.trackPosition(0, Bias.FORWARD);
-        caretShape = new Path();
-        caretShape.getStyleClass().add("flow-caret");
-        caretShape.setStroke(Color.RED);
-        caretShape.setMouseTransparent(true);
-        caretShape.setManaged(false);
         
-        verticalScroll = new ScrollBar();
-        verticalScroll.setOrientation(Orientation.VERTICAL);
-        verticalScroll.setVisible(false);
         
-        horizontalScroll = new ScrollBar();
-        horizontalScroll.setOrientation(Orientation.HORIZONTAL);
-        horizontalScroll.setVisible(false);
-        lineDisplay = new LineDisplay(this::getLineContainerHeight, horizontalScroll.valueProperty(), PrefMgr.getEditorFontCSS(true), listener);
-
-        JavaFXUtil.addChangeListenerPlatform(horizontalScroll.valueProperty(), v -> {
-            // Prevent an infinite loop when we update scroll bar ourselves in render method:
-            if (!updatingScrollBarDirectly)
-            {
-                updateRender(false);
-            }
-        });
-        JavaFXUtil.addChangeListenerPlatform(verticalScroll.valueProperty(), v -> {
-            // Prevent an infinite loop when we update scroll bar ourselves in render method:
-            if (!updatingScrollBarDirectly)
-            {
-                lineDisplay.scrollTo(v.intValue(), (v.doubleValue() - v.intValue()) * -1 * lineDisplay.getLineHeight());
-                updateRender(false);
-            }
-        });
-        lineContainer = new LineContainer(lineDisplay, false);
-        Rectangle clip = new Rectangle();
-        clip.widthProperty().bind(lineContainer.widthProperty());
-        clip.heightProperty().bind(lineContainer.heightProperty());
-        lineContainer.setClip(clip);
-        getChildren().setAll(lineContainer, verticalScroll, horizontalScroll);
         updateRender(false);
-        JavaFXUtil.addChangeListenerPlatform(lineContainer.heightProperty(), h -> JavaFXUtil.runAfterCurrent(() -> updateRender(false)));
-
-        setAccessibleRole(AccessibleRole.TEXT_AREA);
-        selectionListeners.add(new SelectionListener() {
-            int oldCaretPos = 0;
-            int oldAnchorPos = 0;
-            @Override
-            public void selectionChanged(int caretPosition, int anchorPosition)
-            {
-                if (caretPosition != oldCaretPos)
-                {
-                    notifyAccessibleAttributeChanged(AccessibleAttribute.CARET_OFFSET);
-                }
-                if (Math.min(caretPosition, anchorPosition) != Math.min(oldCaretPos, oldAnchorPos))
-                {
-                    notifyAccessibleAttributeChanged(AccessibleAttribute.SELECTION_START);
-                }
-                if (Math.max(caretPosition, anchorPosition) != Math.max(oldCaretPos, oldAnchorPos))
-                {
-                    notifyAccessibleAttributeChanged(AccessibleAttribute.SELECTION_END);
-                }
-                oldAnchorPos = anchorPosition;
-                oldCaretPos = caretPosition;
-            }
-        });
+        
         document.addListener(false, (origStartIncl, replaced, replacement, linesRemoved, linesAdded) -> {
             notifyAccessibleAttributeChanged(AccessibleAttribute.TEXT);
         });
-
-        Nodes.addInputMap(this, InputMap.sequence(
-            InputMap.consume(KeyEvent.KEY_TYPED, this::keyTyped),
-            InputMap.consume(MouseEvent.MOUSE_PRESSED, this::mousePressed),
-            InputMap.consume(MouseEvent.MOUSE_DRAGGED, this::mouseDragged),
-            InputMap.consume(MouseEvent.MOUSE_RELEASED, this::mouseReleased),
-            InputMap.consume(MouseEvent.MOUSE_MOVED, this::mouseMoved)
-            // Note: we deliberately do not handle scroll events here, and instead
-            // handle them in MarginAndTextLine.  See the comments there for more info.
-            // InputMap.consume(ScrollEvent.SCROLL, this::scroll)
-        ));
-
-        JavaFXUtil.addChangeListenerPlatform(widthProperty(), w -> updateRender(false));
-        JavaFXUtil.addChangeListenerPlatform(heightProperty(), h -> updateRender(false));
-        JavaFXUtil.addChangeListenerPlatform(focusedProperty(), f -> updateCaretVisibility());
     }
 
     @Override
+    @OnThread(value = Tag.FXPlatform, ignoreParent = true)
     public Object queryAccessibleAttribute(AccessibleAttribute accessibleAttribute, Object... objects)
     {
         switch (accessibleAttribute)
@@ -247,7 +154,7 @@ public class FlowEditorPane extends Region implements JavaSyntaxView.Display
                 return lineDisplay.getBoundsForRange(document, (Integer)objects[0], (Integer)objects[1]);
             case OFFSET_AT_POINT:
                 Point2D screenPoint = (Point2D)objects[0];
-                return getCaretPositionForLocalPoint(screenToLocal(screenPoint));
+                return getCaretPositionForLocalPoint(screenToLocal(screenPoint)).map(p -> p.getPosition()).orElse(0);
             case HELP:
                 String err = listener.getErrorAtPosition(caret.position);
                 if (err != null)
@@ -258,12 +165,25 @@ public class FlowEditorPane extends Region implements JavaSyntaxView.Display
         return super.queryAccessibleAttribute(accessibleAttribute, objects);
     }
 
-    private double getLineContainerHeight()
+    @Override
+    protected EditorPosition makePosition(int line, int column)
     {
-        return lineContainer.getHeight();
+        return new TrackedPosition(document, document.getLineStart(line) + column, Bias.NONE);
     }
 
-    private void keyTyped(KeyEvent event)
+    @Override
+    protected void keyPressed(KeyEvent event)
+    {
+        // All the key press events are handled by the editor actions system, except the context menu key:
+        if (event.getCode() == KeyCode.CONTEXT_MENU)
+        {
+            showContextMenuAtCaret();
+            event.consume();
+        }
+    }
+
+    @Override
+    protected void keyTyped(KeyEvent event)
     {
         if (!editable)
             return;
@@ -295,110 +215,35 @@ public class FlowEditorPane extends Region implements JavaSyntaxView.Display
         
     }
 
-    private void mousePressed(MouseEvent e)
+    @Override
+    protected void mousePressed(MouseEvent e)
     {
         requestFocus();
         if (e.getButton() == MouseButton.PRIMARY)
         {
             // If shift pressed, don't move anchor; form selection instead:
             boolean setAnchor = !e.isShiftDown();
-            getCaretPositionForMouseEvent(e).ifPresent(setAnchor ? this::positionCaret : p -> moveCaret(p, true));
+            getCaretPositionForMouseEvent(e).ifPresent(p -> {
+                if (setAnchor)
+                    positionCaret(p.getPosition());
+                else
+                    moveCaret(p, true);
+            });
             updateRender(true);
         }
     }
 
-    OptionalInt getCaretPositionForMouseEvent(MouseEvent e)
+    @Override
+    protected void mouseMoved(MouseEvent event)
     {
-        return getCaretPositionForLocalPoint(new Point2D(e.getX(), e.getY()));
+        getCaretPositionForMouseEvent(event).ifPresent(pos -> listener.showErrorPopupForCaretPos(pos.getPosition(), true));
     }
 
-    OptionalInt getCaretPositionForLocalPoint(Point2D localPoint)
+    // Make method public:
+    @Override
+    public Optional<EditorPosition> getCaretPositionForLocalPoint(Point2D localPoint)
     {
-        int[] position = lineDisplay.getCaretPositionForLocalPoint(localPoint);
-        if (position != null)
-        {
-            return OptionalInt.of(document.getLineStart(position[0]) + position[1]);
-        }
-        return OptionalInt.empty();
-    }
-
-    private void mouseMoved(MouseEvent event)
-    {
-        getCaretPositionForMouseEvent(event).ifPresent(pos -> listener.showErrorPopupForCaretPos(pos, true));
-    }
-
-    private void mouseDragged(MouseEvent e)
-    {
-        if (e.getButton() == MouseButton.PRIMARY)
-        {
-            double y = e.getY();
-            // If the user has the cursor more than this amount of pixels beyond the edge,
-            // we speed up the drag:
-            int fastDistance = 30;
-            if (y > getHeight())
-            {
-                offScreenDragScroll = y - getHeight() > fastDistance ? DragScroll.DOWN_FAST : DragScroll.DOWN;
-                y = getHeight() - 1;
-            }
-            else if (y < 0)
-            {
-                offScreenDragScroll = y < -fastDistance ? DragScroll.UP_FAST : DragScroll.UP;
-                y = 0;
-            }
-            else
-            {
-                // Drag is within pane bounds, no need to scroll:
-                offScreenDragScroll = null;
-            }
-            offScreenDragX = e.getX();
-            offScreenDragY = y;
-            // Don't update the anchor:
-            getCaretPositionForLocalPoint(new Point2D(e.getX(), y)).ifPresent(p -> moveCaret(p, false));
-            
-            if (offScreenDragScroll != null && !isDragScrollScheduled)
-            {
-                JavaFXUtil.runAfter(Duration.millis(50), this::doDragScroll);
-                isDragScrollScheduled = true;
-            }
-        }
-    }
-    
-    private void mouseReleased(MouseEvent e)
-    {
-        offScreenDragScroll = null;
-    }
-
-    /**
-     * Called regularly to continue to scroll up/down the file if the user is dragging and keeping
-     * the mouse cursor out of the window.  Will reschedule itself (this is stopped if the user
-     * releases the mouse button, in the mouseReleased button).
-     */
-    private void doDragScroll()
-    {
-        isDragScrollScheduled = false;
-        if (offScreenDragScroll != null)
-        {
-            int amount = 0;
-            switch (offScreenDragScroll)
-            {
-                case UP_FAST:
-                    amount = 50;
-                    break;
-                case UP:
-                    amount = 15;
-                    break;
-                case DOWN:
-                    amount = -15;
-                    break;
-                case DOWN_FAST:
-                    amount = -50;
-                    break;
-            }
-            scroll(0, amount);
-            getCaretPositionForLocalPoint(new Point2D(offScreenDragX, offScreenDragY)).ifPresent(p -> moveCaret(p, false));
-            JavaFXUtil.runAfter(SCROLL_DELAY, this::doDragScroll);
-            isDragScrollScheduled = true;
-        }
+        return super.getCaretPositionForLocalPoint(localPoint);
     }
 
     public void textChanged()
@@ -409,127 +254,11 @@ public class FlowEditorPane extends Region implements JavaSyntaxView.Display
         // FlowEditor is in charge of recording edits
     }
 
-    private void updateRender(boolean ensureCaretVisible)
+    @Override
+    protected void updateRender(boolean ensureCaretVisible)
     {
-        if (ensureCaretVisible)
-        {
-            lineDisplay.ensureLineVisible(caret.getLine());
-        }
+        super.updateRender(ensureCaretVisible);
 
-        // Must calculate horizontal scroll before rendering, in case it updates the horizontal scroll:
-        double width = lineDisplay.calculateLineWidth(document.getLongestLine());
-        // It doesn't look nice if the width the scroll bar shows is exactly the longest line,
-        // as then it feels like it shows "too soon".  So we allow an extra 100 pixels before showing:
-        int EXTRA_WIDTH = 100;
-        horizontalScroll.setMax(width + EXTRA_WIDTH - getWidth());
-        if (horizontalScroll.getValue() > horizontalScroll.getMax())
-        {
-            updatingScrollBarDirectly = true;
-            horizontalScroll.setValue(Math.max(Math.min(horizontalScroll.getValue(), horizontalScroll.getMax()), horizontalScroll.getMin()));
-            updatingScrollBarDirectly = false;
-        }
-        horizontalScroll.setVisibleAmount(getWidth() / (horizontalScroll.getMax() + getWidth()) * horizontalScroll.getMax());
-        horizontalScroll.setVisible(allowScrollBars && width + EXTRA_WIDTH >= getWidth());
-        
-        List<Node> prospectiveChildren = new ArrayList<>();
-        // Use an AbstractList rather than pre-calculate, as that means we don't bother
-        // styling lines which will not be displayed:
-        List<List<StyledSegment>> styledLines = new StyledLines(document, lineStyler);
-        
-        prospectiveChildren.addAll(lineDisplay.recalculateVisibleLines(styledLines, this::snapSizeY, - horizontalScroll.getValue(), lineContainer.getWidth(), lineContainer.getHeight(), false));
-        prospectiveChildren.add(caretShape);
-        verticalScroll.setVisible(allowScrollBars && lineDisplay.getVisibleLineCount() < document.getLineCount());
-        // Note: we don't use actual line count as that "jiggle" by one line as lines are partially
-        // scrolled out of view.  i.e. if you have a window that's tall enough to show 1.8 lines,
-        // the number of actual visible lines may be 2 or 3 depending on where you scroll to.
-        // A more reliable estimate that doesn't jiggle is to work out the 1.8 part like this:
-        double visibleLinesEstimate = getHeight() / lineDisplay.getLineHeight();
-        verticalScroll.setMax(document.getLineCount() - visibleLinesEstimate);
-        verticalScroll.setVisibleAmount(visibleLinesEstimate / document.getLineCount() * verticalScroll.getMax());
-        updatingScrollBarDirectly = true;
-        verticalScroll.setValue(lineDisplay.getLineRangeVisible()[0] - (lineDisplay.getFirstVisibleLineOffset() / lineDisplay.getLineHeight()));
-        updatingScrollBarDirectly = false;
-
-        
-        // This will often avoid changing the children, if the window has not been resized:
-        boolean needToChangeLinesAndCaret = false;
-        for (int i = 0; i < prospectiveChildren.size(); i++)
-        {
-            // Reference equality is fine here:
-            if (i >= lineContainer.getChildren().size() || prospectiveChildren.get(i) != lineContainer.getChildren().get(i))
-            {
-                needToChangeLinesAndCaret = true;
-                break;
-            }
-        }
-        if (needToChangeLinesAndCaret)
-        {
-            lineContainer.getChildren().setAll(prospectiveChildren);
-        }
-        else
-        {
-            // Clear rest after:
-            if (lineContainer.getChildren().size() > prospectiveChildren.size())
-            {
-                lineContainer.getChildren().subList(prospectiveChildren.size(), lineContainer.getChildren().size()).clear();
-            }
-        }
-
-        if (getScene() != null)
-        {
-            scheduleCaretUpdate(ensureCaretVisible);
-            String lineText = getDocument().getLines().get(document.getLineFromPosition(caret.position)).toString();
-            setAccessibleText(lineText);
-        }
-        updateCaretVisibility();
-
-        HashSet<Integer> linesWithSelectionSet = new HashSet<>();
-        
-        if (caret.position != anchor.position)
-        {
-            TrackedPosition startPos = caret.position < anchor.position ? caret : anchor;
-            TrackedPosition endPos = caret.position < anchor.position ? anchor : caret;
-            
-            // Simple case; one line selection:
-            if (startPos.getLine() == endPos.getLine() && lineDisplay.isLineVisible(startPos.getLine()))
-            {
-                TextLine caretLine = lineDisplay.getVisibleLine(startPos.getLine()).textLine;
-                caretLine.showSelection(startPos.getColumn(), endPos.getColumn(), false);
-                linesWithSelectionSet.add(startPos.getLine());
-            }
-            else
-            {
-                // Need composite of several lines
-                // Do all except last line:
-                for (int line = startPos.getLine(); line < endPos.getLine(); line++)
-                {
-                    int startOnThisLine = line == startPos.getLine() ? startPos.getColumn() : 0;
-                    if (lineDisplay.isLineVisible(line))
-                    {
-                        TextLine textLine = lineDisplay.getVisibleLine(line).textLine;
-                        textLine.showSelection(startOnThisLine, document.getLineStart(line + 1) - document.getLineStart(line), true);
-                        linesWithSelectionSet.add(line);
-                    }
-                }
-                // Now do last line:
-                if (lineDisplay.isLineVisible(endPos.getLine()))
-                {
-                    lineDisplay.getVisibleLine(endPos.getLine()).textLine.showSelection(0, endPos.getColumn(), false);
-                    linesWithSelectionSet.add(endPos.getLine());
-                }
-            }
-        }
-        
-        // Need to clear any stale selection from other lines:
-        int[] visibleLineRange = lineDisplay.getLineRangeVisible();
-        for (int line = visibleLineRange[0]; line <= visibleLineRange[1]; line++)
-        {
-            if (!linesWithSelectionSet.contains(line))
-            {
-                lineDisplay.getVisibleLine(line).textLine.hideSelection();
-            }
-        }
-        
         if (errorQuery != null)
         {
             for (IndexRange indexRange : errorQuery.getErrorUnderlines())
@@ -537,120 +266,18 @@ public class FlowEditorPane extends Region implements JavaSyntaxView.Display
                 addErrorUnderline(indexRange.getStart(), indexRange.getEnd());
             }
         }
-        
-        /* Code for showing error underlines
-        for (IndexRange errorUnderline : errorUnderlines)
-        {
-            Path err = new Path();
-            err.setFill(null);
-            err.setStroke(new ImagePattern(UNDERLINE_IMAGE, 0, 0, 2, 2, false));
-            err.setMouseTransparent(true);
-            TextLine errTextLine = lineDisplay.currentlyVisibleLines.get(document.getLineFromPosition(errorUnderline.getStart()));
-            err.getElements().setAll(keepBottom(errTextLine.rangeShape(document.getColumnFromPosition(errorUnderline.getStart()), document.getColumnFromPosition(errorUnderline.getEnd()))));
-            err.setLayoutX(errTextLine.getLayoutX());
-            err.setLayoutY(errTextLine.getLayoutY());
-            getChildren().add(err);
-        }
-        */
-        
-        // Temporary calculations for box location:
-        /*
-        String docContent = document.getFullContent();
-        int nextRect = 0;
-        for (int publicLoc = docContent.indexOf("public"); publicLoc != -1; publicLoc = docContent.indexOf("public", publicLoc + 1))
-        {
-            int open = 0;
-            int closingCurly = publicLoc;
-            while (closingCurly < docContent.length())
-            {
-                closingCurly += 1;
-                if (docContent.charAt(closingCurly) == '{')
-                    open++;
-                if (docContent.charAt(closingCurly) == '}')
-                {
-                    open--;
-                    if (open == 0)
-                        break;
-                }
-            }
-            // Now draw a background box the full width of the header line, down to beneath the curly
-            double x = getCaretLikeBounds(publicLoc).getMinX();
-            double y = getCaretLikeBounds(publicLoc).getMinY();
-            double width = lineDisplay.currentlyVisibleLines.get(document.getLineFromPosition(publicLoc)).getWidth() - x;
-            double height = getCaretLikeBounds(closingCurly).getMaxY() - y;
-            Rectangle r = new Rectangle(x, y, width, height);
-            r.setMouseTransparent(true);
-            r.setStroke(Color.GRAY);
-            r.setFill(docContent.startsWith("public class", publicLoc) ? Color.PALEGREEN : Color.LIGHTYELLOW);
-            getChildren().add(nextRect++, r);
-        }
-        */
-        
-        lineContainer.requestLayout();        
-        requestLayout();
     }
 
-    /**
-     * Schedules an update of the caret graphics after the next scene layout.
-     * @param ensureCaretVisibleRequestedThisTime True if we want to scroll to make sure the caret is on-screen.
-     */
-    private void scheduleCaretUpdate(boolean ensureCaretVisibleRequestedThisTime)
+    @Override
+    protected int getLineLength(int lineIndex)
     {
-        // Passing true overrides false:
-        this.caretUpdateEnsureVisible = caretUpdateEnsureVisible || ensureCaretVisibleRequestedThisTime;
-        Scene scene = getScene();
-        if (scene == null || caretUpdateScheduled)
-        {
-            return;
-        }
-        
-        JavaFXUtil.runAfterNextLayout(scene, () -> {
-            // Important that we pick up the value from the field, as an intervening request since we were scheduled
-            // may have changed the value:
-            boolean ensureCaretVisible = caretUpdateEnsureVisible;
-            caretUpdateScheduled = false;
-            caretUpdateEnsureVisible = false;
-            if (lineDisplay.isLineVisible(caret.getLine()))
-            {
-                MarginAndTextLine line = lineDisplay.getVisibleLine(caret.getLine());
-                if (line.textLine.isNeedsLayout())
-                {
-                    // Still need to do more layout; try again after next layout:
-                    scheduleCaretUpdate(ensureCaretVisible);
-                    return;
-                }
-                
-                caretShape.getElements().setAll(line.textLine.caretShape(caret.getColumn(), true));
-                caretShape.layoutXProperty().bind(line.layoutXProperty());
-                if (ensureCaretVisible)
-                {
-                    Bounds caretBounds = caretShape.getBoundsInLocal();
-                    double maxScroll = Math.max(0, caretBounds.getCenterX() - 8);
-                    double minScroll = Math.max(0, caretBounds.getCenterX() - (getWidth() - MarginAndTextLine.TEXT_LEFT_EDGE - verticalScroll.prefWidth(-1) - 6));
-                    horizontalScroll.setValue(Math.min(maxScroll, Math.max(minScroll, horizontalScroll.getValue())));
-                }
-                caretShape.translateXProperty().set(MarginAndTextLine.TEXT_LEFT_EDGE - horizontalScroll.getValue());
-                caretShape.layoutYProperty().bind(line.layoutYProperty());
-                caretShape.setVisible(true);
-            }
-            else
-            {
-                caretShape.getElements().clear();
-                caretShape.layoutXProperty().unbind();
-                caretShape.layoutYProperty().unbind();
-                caretShape.setLayoutX(0);
-                caretShape.setLayoutY(0);
-                caretShape.setVisible(false);
-            }
-        });
-        caretUpdateScheduled = true;
+        return document.getLineLength(lineIndex);
     }
 
-    private void updateCaretVisibility()
+    @Override
+    protected String getLineContentAtCaret()
     {
-        boolean focused = isFocused();
-        boolean lineVisible = lineDisplay.isLineVisible(caret.getLine());
-        caretShape.setVisible(lineVisible && (focused || forceCaretShow));
+        return document.getLines().get(caret.getLine()).toString();
     }
 
     public boolean isLineVisible(int line)
@@ -789,7 +416,7 @@ public class FlowEditorPane extends Region implements JavaSyntaxView.Display
             if (breakpointLines.contains(line) || line == stepLine)
             {
                 ArrayList<BackgroundItem> regions = new ArrayList<>(scopes);
-                BackgroundItem region = new BackgroundItem(0, getWidth() - MarginAndTextLine.TEXT_LEFT_EDGE, 
+                BackgroundItem region = new BackgroundItem(0, getWidth() - MarginAndTextLine.textLeftEdge(true), 
                     new BackgroundFill((line == stepLine ? listener.stepMarkOverlayColorProperty() : listener.breakpointOverlayColorProperty()).get(), null, null));
                 regions.add(region);
                 withOverlays.put(line, regions);
@@ -835,12 +462,6 @@ public class FlowEditorPane extends Region implements JavaSyntaxView.Display
         moveCaret(end);
     }
 
-    public void setFakeCaret(boolean fakeOn)
-    {
-        forceCaretShow = fakeOn;
-        updateCaretVisibility();
-    }
-
     public boolean isEditable()
     {
         return editable;
@@ -864,75 +485,6 @@ public class FlowEditorPane extends Region implements JavaSyntaxView.Display
         lineDisplay.hideAllErrorUnderlines();
     }
 
-    public double getTextDisplayWidth()
-    {
-        return lineContainer.getWidth() - MarginAndTextLine.TEXT_LEFT_EDGE;
-    }
-
-    @OnThread(value = Tag.FXPlatform, ignoreParent = true)
-    public static class LineContainer extends Region
-    {
-        private final LineDisplay lineDisplay;
-        private final boolean lineWrapping;
-
-        public LineContainer(LineDisplay lineDisplay, boolean lineWrapping)
-        {
-            this.lineDisplay = lineDisplay;
-            this.lineWrapping = lineWrapping;
-            JavaFXUtil.addStyleClass(this,"line-container");
-        }
-        
-        @Override
-        protected void layoutChildren()
-        {
-            double y = snapPositionY(lineDisplay.getFirstVisibleLineOffset());
-            if (!lineWrapping)
-            {
-                double height = snapSizeY(lineDisplay.calculateLineHeight());
-                for (Node child : getChildren())
-                {
-                    if (child instanceof MarginAndTextLine)
-                    {
-                        double nextY = snapPositionY(y + height);
-                        child.resizeRelocate(0, y, Math.max(getWidth(), child.prefWidth(-1.0)), nextY - y);
-                        y = nextY;
-                    }
-                }
-            }
-            else
-            {
-                for (Node child : getChildren())
-                {
-                    if (child instanceof MarginAndTextLine)
-                    {
-                        MarginAndTextLine line = (MarginAndTextLine) child;
-                        double height = snapSizeY(child.prefHeight(getWidth()));
-                        double nextY = snapPositionY(y + height);
-                        child.resizeRelocate(0, y, getWidth(), nextY - y);
-                        y = nextY;
-                    }
-                }
-            }
-        }
-
-        @Override
-        @OnThread(Tag.FX)
-        protected ObservableList<Node> getChildren()
-        {
-            return super.getChildren();
-        }
-    }
-
-    @Override
-    protected void layoutChildren()
-    {
-        double horizScrollHeight = horizontalScroll.isVisible() ? horizontalScroll.prefHeight(-1) : 0;
-        horizontalScroll.resizeRelocate(0, getHeight() - horizScrollHeight, getWidth(), horizScrollHeight);
-        double vertScrollWidth = verticalScroll.isVisible() ? verticalScroll.prefWidth(-1) : 0;
-        verticalScroll.resizeRelocate(getWidth() - vertScrollWidth, 0, vertScrollWidth, getHeight() - horizScrollHeight);
-        lineContainer.resizeRelocate(0, 0, getWidth() - vertScrollWidth, getHeight() - horizScrollHeight);
-    }
-
     public HoleDocument getDocument()
     {
         return document;
@@ -947,33 +499,6 @@ public class FlowEditorPane extends Region implements JavaSyntaxView.Display
     {
         lineDisplay.scrollTo(lineIndex, 0.0);
         updateRender(false);
-    }
-
-    /**
-     * Called when a scroll event has occurred on one of the text lines in the editor
-     * @param scrollEvent The scroll event that occurred.
-     */
-    public void scrollEventOnTextLine(ScrollEvent scrollEvent)
-    {
-        scroll(scrollEvent.getDeltaX(), scrollEvent.getDeltaY());
-    }
-    
-    private void scroll(double deltaX, double deltaY)
-    {
-        updatingScrollBarDirectly = true;
-        horizontalScroll.setValue(Math.max(horizontalScroll.getMin(), Math.min(horizontalScroll.getMax(), horizontalScroll.getValue() - deltaX)));
-        updatingScrollBarDirectly = false;
-        pendingScrollY += deltaY;
-        if (!postScrollRenderQueued)
-        {
-            postScrollRenderQueued = true;
-            JavaFXUtil.runAfter(SCROLL_DELAY, () -> {
-                postScrollRenderQueued = false;
-                lineDisplay.scrollBy(pendingScrollY, document.getLineCount());
-                pendingScrollY = 0;
-                updateRender(false);
-            });
-        }
     }
 
     /**
@@ -1100,12 +625,13 @@ public class FlowEditorPane extends Region implements JavaSyntaxView.Display
      */
     public void moveCaret(int position)
     {
-        moveCaret(position, true);
+        moveCaret(new TrackedPosition(document, position, Bias.NONE), true);
     }
 
-    private void moveCaret(int position, boolean ensureCaretVisible)
+    @Override
+    protected void moveCaret(EditorPosition position, boolean ensureCaretVisible)
     {
-        caret.moveTo(position);
+        caret.moveTo(position.getPosition());
         targetColumnForVerticalMovement = -1;
         justAddedOpeningCurlyBracket = false;
         updateRender(ensureCaretVisible);
@@ -1123,14 +649,26 @@ public class FlowEditorPane extends Region implements JavaSyntaxView.Display
         callSelectionListeners();
     }
     
-    public int getCaretPosition()
+    @Override
+    public EditorPosition getCaretEditorPosition()
     {
-        return caret.position;
+        return caret;
     }
     
+    @Override
+    public EditorPosition getAnchorEditorPosition()
+    {
+        return anchor;
+    }
+
+    public int getCaretPosition()
+    {
+        return caret.getPosition();
+    }
+
     public int getAnchorPosition()
     {
-        return anchor.position;
+        return anchor.getPosition();
     }
 
     public void addLineDisplayListener(LineDisplayListener lineDisplayListener)
@@ -1199,12 +737,6 @@ public class FlowEditorPane extends Region implements JavaSyntaxView.Display
         this.lineStyler = lineStyler;
     }
 
-    public void setAllowScrollBars(boolean allowScrollBars)
-    {
-        this.allowScrollBars = allowScrollBars;
-        updateRender(false);
-    }
-
     /**
      * Is the user's most recent action to have typed an open curly bracket?
      * Used to decide whether to auto-add a closing curly bracket if they then press Enter.
@@ -1220,34 +752,28 @@ public class FlowEditorPane extends Region implements JavaSyntaxView.Display
         return lineDisplay.calculateLineWidth(content);
     }
 
-    private void callSelectionListeners()
+    @Override
+    protected int getLineCount()
     {
-        for (SelectionListener selectionListener : selectionListeners)
-        {
-            selectionListener.selectionChanged(caret.position, anchor.position);
-        }
-    }
-    
-    public void addSelectionListener(SelectionListener selectionListener)
-    {
-        selectionListeners.add(selectionListener);
+        return document.getLineCount();
     }
 
-    /**
-     * Allows tracking of the caret position and anchor position
-     * (which together delineate the selection).
-     */
-    public static interface SelectionListener
+    @Override
+    protected List<List<StyledSegment>> getStyledLines()
     {
-        public void selectionChanged(int caretPosition, int anchorPosition);
+        // Use an AbstractList rather than pre-calculate, as that means we don't bother
+        // styling lines which will not be displayed:
+        return new StyledLines(document, lineStyler);
     }
-    
-    public static interface FlowEditorPaneListener extends ScopeColors
-    {
-        // The left-hand margin was clicked for (zero-based) lineIndex.
-        // Returns true if breakpoint was successfully toggled for that line, false if there was a problem.
-        public boolean marginClickedForLine(int lineIndex);
 
+    @Override
+    protected String getLongestLineInWholeDocument()
+    {
+        return document.getLongestLine();
+    }
+
+    public static interface FlowEditorPaneListener extends ScopeColors, BaseEditorPaneListener
+    {
         public Set<Integer> getBreakpointLines();
 
         // Returns -1 if no step line
@@ -1256,18 +782,6 @@ public class FlowEditorPane extends Region implements JavaSyntaxView.Display
         public void showErrorPopupForCaretPos(int caretPos, boolean mousePosition);
 
         public String getErrorAtPosition(int caretPos);
-
-        /**
-         * Gets the context menu to show.  If necessary, should be hidden before being returned
-         * by this method.
-         */
-        ContextMenu getContextMenuToShow();
-
-        /**
-         * Called when a scroll event has occurred on one of the text lines in the editor
-         * @param scrollEvent The scroll event that occurred.
-         */
-        public void scrollEventOnTextLine(ScrollEvent scrollEvent);
     }
 
     // Use an AbstractList rather than pre-calculate, as that means we don't bother
